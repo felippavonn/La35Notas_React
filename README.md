@@ -1,6 +1,6 @@
 # La35Notas
 
-Sistema de gestión académica y calificaciones desarrollado en **React** y **Vite**.
+Sistema de gestión académica y calificaciones desarrollado en **React**.
 
 ## Características
 * **Panel General**: Estadísticas de alumnos, actividades y calendario.
