@@ -1,4 +1,4 @@
-# La35Notas – Gestión de Calificaciones
+# La35Notas
 
 Sistema de gestión académica y calificaciones desarrollado en **React** y **Vite**.
 
