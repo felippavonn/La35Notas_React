@@ -1,8 +1,19 @@
-# React + Vite
+# La35Notas – Gestión de Calificaciones
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+Sistema de gestión académica y calificaciones desarrollado en **React** y **Vite**.
 
-Currently, two official plugins are available:
+## 🚀 Características
+* **Panel General**: Estadísticas de alumnos, actividades y calendario.
+* **Gestión de Alumnos**: Filtros por curso y estado, alta de nuevos alumnos.
+* **Carga de Calificaciones**: Promedios sugeridos y gestión por periodos.
+* **Vistas por Rol**: Adaptable para Administrador, Docente y Alumno.
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react/README.md) uses [Babel](https://babeljs.io/) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+## 🛠️ Tecnologías
+* React 18
+* Vite
+* CSS3 (Variables & Flexbox)
+
+## 💻 Instalación y Ejecución
+```bash
+npm install
+npm run dev
