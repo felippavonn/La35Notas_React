@@ -350,16 +350,22 @@ function App() {
   }
 
   const visibleNav = [
-    { id: 'dashboard', label: 'Panel General', icon: '⊞' },
+    ...(['admin', 'preceptor'].includes(rol)
+      ? [{ id: 'dashboard', label: 'Panel General', icon: '⊞' }]
+      : []),
     ...(!isAlumno ? [
       { id: 'alumnos', label: 'Alumnos', icon: '👥' },
       { id: 'docentes', label: 'Docentes', icon: '🏫' },
       { id: 'cursos', label: 'Cursos', icon: '📋' },
     ] : []),
-    ...(canManageNotes ? [{ id: 'notas', label: 'Carga de Notas', icon: '✏️' }] : []),
+    ...(canManageNotes ? [
+      { id: 'notas', label: 'Carga de Notas', icon: '✏️' }
+    ] : []),
     { id: 'consulta', label: 'Consulta / Boletín', icon: '📊' },
-    ...(!isAlumno ? [{ id: 'notificaciones', label: 'Notificaciones', icon: '🔔' }] : []),
-  ]
+    ...(!isAlumno ? [
+      { id: 'notificaciones', label: 'Notificaciones', icon: '🔔' }
+    ] : []),
+  ];
 
   return (
     <div id="app">
