@@ -346,13 +346,30 @@ app.get('/api/mis-notas', auth, roles('alumno'), async (req, res) => {
   try {
     const { rows } = await pool.query(`
       SELECT m.codigo, m.nombre AS materia,
-             MAX(n.calificacion) FILTER (WHERE n.tipo_evaluacion='BIMESTRE_1') AS bim1,
-             MAX(n.calificacion) FILTER (WHERE n.tipo_evaluacion='BIMESTRE_2') AS bim2,
-             MAX(n.calificacion) FILTER (WHERE n.tipo_evaluacion='CUATRIMESTRE_1') AS cuat1,
-             MAX(n.calificacion) FILTER (WHERE n.tipo_evaluacion='FINAL') AS final
+            MAX(n.calificacion) FILTER (
+              WHERE n.tipo_evaluacion = 'BIMESTRE_1'
+            ) AS bim1,
+            MAX(n.calificacion) FILTER (
+              WHERE n.tipo_evaluacion = 'BIMESTRE_2'
+            ) AS bim2,
+            MAX(n.calificacion) FILTER (
+              WHERE n.tipo_evaluacion = 'CUATRIMESTRE_1'
+            ) AS cuat1,
+            MAX(n.calificacion) FILTER (
+              WHERE n.tipo_evaluacion = 'BIMESTRE_3'
+            ) AS bim3,
+            MAX(n.calificacion) FILTER (
+              WHERE n.tipo_evaluacion = 'BIMESTRE_4'
+            ) AS bim4,
+            MAX(n.calificacion) FILTER (
+              WHERE n.tipo_evaluacion = 'CUATRIMESTRE_2'
+            ) AS cuat2,
+            MAX(n.calificacion) FILTER (
+              WHERE n.tipo_evaluacion = 'FINAL'
+            ) AS final
       FROM materia m
-      JOIN nota n ON n.codigo_materia=m.codigo
-      WHERE n.dni_alumno=$1
+      JOIN nota n ON n.codigo_materia = m.codigo
+      WHERE n.dni_alumno = $1
       GROUP BY m.codigo, m.nombre
       ORDER BY m.nombre
     `, [req.user.dni_alumno])

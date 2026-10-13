@@ -19,8 +19,12 @@ const EVALUACIONES = [
   ['BIMESTRE_1', '1er Bimestre'],
   ['BIMESTRE_2', '2do Bimestre'],
   ['CUATRIMESTRE_1', '1er Cuatrimestre'],
-  ['FINAL', 'Final'],
+  ['BIMESTRE_3', '3er Bimestre'],
+  ['BIMESTRE_4', '4to Bimestre'],
+  ['CUATRIMESTRE_2', '2do Cuatrimestre'],
+  ['FINAL', 'Nota final'],
 ]
+
 
 function App() {
   const [session, setSession] = useState(getStoredUser())
@@ -61,10 +65,14 @@ function App() {
     id_curso: '',
     estado: 'Activo',
   })
+  
   const [notaForm, setNotaForm] = useState({
     BIMESTRE_1: '',
     BIMESTRE_2: '',
     CUATRIMESTRE_1: '',
+    BIMESTRE_3: '',
+    BIMESTRE_4: '',
+    CUATRIMESTRE_2: '',
     FINAL: '',
     observacion: '',
   })
@@ -249,25 +257,54 @@ function App() {
       pushToast(error.message, 'warn')
     }
   }
-
+  
   function openNotaModal(alumno) {
     const existing = noteRows.find((row) => row.dni === alumno.dni)?.notas || {}
     setNotaForm({
       BIMESTRE_1: existing.BIMESTRE_1 ?? '',
       BIMESTRE_2: existing.BIMESTRE_2 ?? '',
       CUATRIMESTRE_1: existing.CUATRIMESTRE_1 ?? '',
+      BIMESTRE_3: existing.BIMESTRE_3 ?? '',
+      BIMESTRE_4: existing.BIMESTRE_4 ?? '',
+      CUATRIMESTRE_2: existing.CUATRIMESTRE_2 ?? '',
       FINAL: existing.FINAL ?? '',
       observacion: '',
     })
     setModalNota(alumno)
   }
+    
+  function calculateAverage(first, second) {
+    if (
+      first === '' || first == null ||
+      second === '' || second == null ||
+      !Number.isFinite(Number(first)) ||
+      !Number.isFinite(Number(second))
+    ) {
+      return '—'
+    }
 
-  function suggestedAverage() {
-    const values = [notaForm.BIMESTRE_1, notaForm.BIMESTRE_2]
-      .map(Number)
-      .filter((value, index) => notaForm[index === 0 ? 'BIMESTRE_1' : 'BIMESTRE_2'] !== '' && Number.isFinite(value))
-    return values.length ? (values.reduce((sum, value) => sum + value, 0) / values.length).toFixed(1) : '—'
+    return ((Number(first) + Number(second)) / 2).toFixed(2)
   }
+
+  function suggestedAverages() {
+    const cuatrimestre1 = calculateAverage(
+      notaForm.BIMESTRE_1,
+      notaForm.BIMESTRE_2
+    )
+
+    const cuatrimestre2 = calculateAverage(
+      notaForm.BIMESTRE_3,
+      notaForm.BIMESTRE_4
+    )
+
+    const final = calculateAverage(
+      notaForm.CUATRIMESTRE_1,
+      notaForm.CUATRIMESTRE_2
+    )
+
+    return { cuatrimestre1, cuatrimestre2, final }
+  }
+
 
   async function saveNotas(event) {
     event.preventDefault()
@@ -350,7 +387,7 @@ function App() {
   }
 
   const visibleNav = [
-    ...(['admin', 'preceptor'].includes(rol)
+    ...(['admin', 'preceptor'].includes(session?.rol)
       ? [{ id: 'dashboard', label: 'Panel General', icon: '⊞' }]
       : []),
     ...(!isAlumno ? [
@@ -469,23 +506,127 @@ function App() {
         </div>
       )}
 
-      {modalNota && (
-        <div className="modal-overlay open" onMouseDown={(event) => event.target === event.currentTarget && setModalNota(null)}>
-          <form className="modal" onSubmit={saveNotas}>
-            <div className="modal-title">Cargar / editar nota</div>
-            <div className="modal-sub">{modalNota.apellido}, {modalNota.nombre}</div>
-            <div className="nota-grid">
-              {EVALUACIONES.slice(0, 3).map(([key, label]) => (
-                <div key={key} className="nota-field"><label>{label}</label><input type="number" min="1" max="10" step="0.01" value={notaForm[key]} onChange={(e) => setNotaForm({ ...notaForm, [key]: e.target.value })} /></div>
-              ))}
-            </div>
-            <div className="promedio-preview"><div className="label">Promedio sugerido</div><div className="value">{suggestedAverage()}</div><div className="hint">La nota asentada sigue quedando bajo decisión del docente.</div></div>
-            <div className="nota-field" style={{ marginTop: 12 }}><label>Nota final</label><input type="number" min="1" max="10" step="0.01" value={notaForm.FINAL} onChange={(e) => setNotaForm({ ...notaForm, FINAL: e.target.value })} /></div>
-            <div className="nota-field" style={{ marginTop: 12 }}><label>Contenidos incompletos / observación</label><input value={notaForm.observacion} onChange={(e) => setNotaForm({ ...notaForm, observacion: e.target.value })} placeholder="Ej: Unidad 3 — Ecuaciones cuadráticas" /></div>
-            <div className="modal-footer"><button type="button" className="btn btn-ghost" onClick={() => setModalNota(null)}>Cancelar</button><button type="submit" className="btn btn-blue">Guardar nota ✓</button></div>
-          </form>
+      
+  {modalNota && (
+    <div
+      className="modal-overlay open"
+      onMouseDown={(event) =>
+        event.target === event.currentTarget && setModalNota(null)
+      }
+    >
+      <form className="modal" onSubmit={saveNotas}>
+        <div className="modal-title">Cargar / editar notas</div>
+        <div className="modal-sub">
+          {modalNota.apellido}, {modalNota.nombre}
         </div>
-      )}
+
+        <div className="nota-grid">
+          {[
+            ['BIMESTRE_1', '1er Bimestre'],
+            ['BIMESTRE_2', '2do Bimestre'],
+            ['BIMESTRE_3', '3er Bimestre'],
+            ['BIMESTRE_4', '4to Bimestre'],
+          ].map(([key, label]) => (
+            <div key={key} className="nota-field">
+              <label>{label}</label>
+              <input
+                type="number"
+                min="1"
+                max="10"
+                step="0.01"
+                value={notaForm[key]}
+                onChange={(event) =>
+                  setNotaForm({
+                    ...notaForm,
+                    [key]: event.target.value,
+                  })
+                }
+              />
+            </div>
+          ))}
+        </div>
+
+        <div className="promedio-preview">
+          <div className="label">Promedios sugeridos</div>
+
+          <div className="nota-row">
+            <span>1er Cuatrimestre</span>
+            <strong>{suggestedAverages().cuatrimestre1}</strong>
+          </div>
+
+          <div className="nota-row">
+            <span>2do Cuatrimestre</span>
+            <strong>{suggestedAverages().cuatrimestre2}</strong>
+          </div>
+
+          <div className="nota-row">
+            <span>Nota final</span>
+            <strong>{suggestedAverages().final}</strong>
+          </div>
+
+          <div className="hint">
+            Los promedios se calculan automáticamente. Podés registrar
+            las notas asentadas en los campos siguientes.
+          </div>
+        </div>
+
+        {[
+          ['CUATRIMESTRE_1', 'Nota del 1er Cuatrimestre'],
+          ['CUATRIMESTRE_2', 'Nota del 2do Cuatrimestre'],
+          ['FINAL', 'Nota final asentada'],
+        ].map(([key, label]) => (
+          <div
+            key={key}
+            className="nota-field"
+            style={{ marginTop: 12 }}
+          >
+            <label>{label}</label>
+            <input
+              type="number"
+              min="1"
+              max="10"
+              step="0.01"
+              value={notaForm[key]}
+              onChange={(event) =>
+                setNotaForm({
+                  ...notaForm,
+                  [key]: event.target.value,
+                })
+              }
+            />
+          </div>
+        ))}
+
+        <div className="nota-field" style={{ marginTop: 12 }}>
+          <label>Contenidos incompletos / observación</label>
+          <input
+            value={notaForm.observacion}
+            onChange={(event) =>
+              setNotaForm({
+                ...notaForm,
+                observacion: event.target.value,
+              })
+            }
+            placeholder="Ej: Unidad 3 — Ecuaciones cuadráticas"
+          />
+        </div>
+
+        <div className="modal-footer">
+          <button
+            type="button"
+            className="btn btn-ghost"
+            onClick={() => setModalNota(null)}
+          >
+            Cancelar
+          </button>
+
+          <button type="submit" className="btn btn-blue">
+            Guardar notas ✓
+          </button>
+        </div>
+      </form>
+    </div>
+  )}
 
       <div className="toast-container">
         {toast.map((item) => <div key={item.id} className={`toast show ${item.type === 'warn' ? 'warn-toast' : 'ok-toast'}`}>{item.message}</div>)}
@@ -573,7 +714,67 @@ function NotasPage({ cursos, materias, notaCurso, setNotaCurso, notaMateria, set
     <>
       <div className="section-header"><div className="section-title">Carga de Calificaciones</div><span className="badge badge-blue">{EVALUACIONES.find(([key]) => key === notaPeriodo)?.[1] || 'Período'}</span></div>
       <div className="card" style={{ marginBottom: 20 }}><div className="filters"><select value={notaCurso} onChange={(e) => setNotaCurso(e.target.value)}><option value="">Seleccionar curso…</option>{cursos.map((curso) => <option key={curso.id_curso} value={curso.id_curso}>{curso.anio}° {curso.division}</option>)}</select><select value={notaMateria} onChange={(e) => setNotaMateria(e.target.value)}><option value="">Seleccionar materia…</option>{materias.map((materia) => <option key={materia.codigo} value={materia.codigo}>{materia.nombre}</option>)}</select><select value={notaPeriodo} onChange={(e) => setNotaPeriodo(e.target.value)}>{EVALUACIONES.map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></div></div>
-      {!notaCurso || !notaMateria ? <div className="empty-state large">Seleccioná curso y materia para cargar notas.</div> : <div className="card"><div className="table-wrap"><table><thead><tr><th>Alumno</th><th>DNI</th><th>Bim 1</th><th>Bim 2</th><th>Promedio</th><th>Final</th><th></th></tr></thead><tbody>{noteRows.map((row) => { const b1 = row.notas.BIMESTRE_1; const b2 = row.notas.BIMESTRE_2; const avg = b1 != null && b2 != null ? ((Number(b1)+Number(b2))/2).toFixed(1) : '—'; return <tr key={row.dni}><td>{row.nombre}</td><td>{row.dni}</td><td>{b1 ?? '—'}</td><td>{b2 ?? '—'}</td><td><span className={`nota-cell ${avg !== '—' && Number(avg) >= 6 ? 'nota-ok' : 'nota-warn'}`}>{avg}</span></td><td>{row.notas.FINAL ?? '—'}</td><td><button className="btn btn-ghost btn-sm" onClick={() => openNotaModal({ dni: row.dni, ...nameParts(row.nombre) })}>✏️</button></td></tr>})}{!noteRows.length && <tr><td colSpan="7"><div className="empty-state">No hay calificaciones cargadas para esta selección.</div></td></tr>}</tbody></table></div></div>}
+      {!notaCurso || !notaMateria ? <div className="empty-state large">Seleccioná curso y materia para cargar notas.</div> : 
+        <div className="card">
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Alumno</th>
+                  <th>DNI</th>
+                  <th>Bim. 1</th>
+                  <th>Bim. 2</th>
+                  <th>1er Cuat.</th>
+                  <th>Bim. 3</th>
+                  <th>Bim. 4</th>
+                  <th>2do Cuat.</th>
+                  <th>Final</th>
+                  <th>Acciones</th>
+                </tr>
+              </thead>
+
+              <tbody>
+                {noteRows.map((row) => (
+                  <tr key={row.dni}>
+                    <td>{row.nombre}</td>
+                    <td>{row.dni}</td>
+                    <td>{row.notas.BIMESTRE_1 ?? '—'}</td>
+                    <td>{row.notas.BIMESTRE_2 ?? '—'}</td>
+                    <td>{row.notas.CUATRIMESTRE_1 ?? '—'}</td>
+                    <td>{row.notas.BIMESTRE_3 ?? '—'}</td>
+                    <td>{row.notas.BIMESTRE_4 ?? '—'}</td>
+                    <td>{row.notas.CUATRIMESTRE_2 ?? '—'}</td>
+                    <td>{row.notas.FINAL ?? '—'}</td>
+                    <td>
+                      <button
+                        className="btn btn-ghost btn-sm"
+                        onClick={() =>
+                          openNotaModal({
+                            dni: row.dni,
+                            ...nameParts(row.nombre),
+                          })
+                        }
+                      >
+                        ✏️
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+
+                {!noteRows.length && (
+                  <tr>
+                    <td colSpan="10">
+                      <div className="empty-state">
+                        No hay calificaciones cargadas para esta selección.
+                      </div>
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+        }
     </>
   )
 }
@@ -588,7 +789,50 @@ function ConsultaPage({ isAlumno, misNotas, alumnos }) {
   return (
     <>
       <div className="section-header"><div className="section-title">{isAlumno ? 'Mis Calificaciones' : 'Resumen de Calificaciones'}</div></div>
-      <div className="my-notas-grid">{cards.map((item, index) => <div className="materia-card" key={`${item.materia}-${index}`}><div className="materia-header"><div className="materia-name">{item.materia}</div>{isAlumno && <span className="badge badge-blue">Consulta</span>}</div><div className="materia-body">{isAlumno ? <><div className="nota-row"><span>1er Bimestre:</span><span className="nota-row-val">{item.bim1 ?? '—'}</span></div><div className="nota-row"><span>2do Bimestre:</span><span className="nota-row-val">{item.bim2 ?? '—'}</span></div><div className="nota-row"><span>1er Cuatrimestre:</span><span className="nota-row-val">{item.cuat1 ?? '—'}</span></div><div className="nota-row"><span>Final:</span><span className={`nota-row-val ${item.final != null && Number(item.final) >= 6 ? 'ok' : 'warn'}`}>{item.final ?? '—'}</span></div></> : <div className="nota-row"><span>Promedio</span><span className={`nota-row-val ${Number(item.final) >= 6 ? 'ok' : 'warn'}`}>{Number(item.final || 0).toFixed(1)}</span></div>}</div></div>)}{!cards.length && <div className="empty-state">No hay calificaciones para mostrar.</div>}</div>
+      <div className="my-notas-grid">{cards.map((item, index) => <div className="materia-card" key={`${item.materia}-${index}`}><div className="materia-header"><div className="materia-name">{item.materia}</div>{isAlumno && <span className="badge badge-blue">Consulta</span>}</div><div className="materia-body">{isAlumno ? 
+  <>
+    <div className="nota-row">
+      <span>1er Bimestre:</span>
+      <span className="nota-row-val">{item.bim1 ?? '—'}</span>
+    </div>
+
+    <div className="nota-row">
+      <span>2do Bimestre:</span>
+      <span className="nota-row-val">{item.bim2 ?? '—'}</span>
+    </div>
+
+    <div className="nota-row">
+      <span>1er Cuatrimestre:</span>
+      <span className="nota-row-val">{item.cuat1 ?? '—'}</span>
+    </div>
+
+    <div className="nota-row">
+      <span>3er Bimestre:</span>
+      <span className="nota-row-val">{item.bim3 ?? '—'}</span>
+    </div>
+
+    <div className="nota-row">
+      <span>4to Bimestre:</span>
+      <span className="nota-row-val">{item.bim4 ?? '—'}</span>
+    </div>
+
+    <div className="nota-row">
+      <span>2do Cuatrimestre:</span>
+      <span className="nota-row-val">{item.cuat2 ?? '—'}</span>
+    </div>
+
+    <div className="nota-row">
+      <span>Nota final:</span>
+      <span
+        className={`nota-row-val ${
+          item.final != null && Number(item.final) >= 6 ? 'ok' : 'warn'
+        }`}
+      >
+        {item.final ?? '—'}
+      </span>
+    </div>
+  </>
+ : <div className="nota-row"><span>Promedio</span><span className={`nota-row-val ${Number(item.final) >= 6 ? 'ok' : 'warn'}`}>{Number(item.final || 0).toFixed(1)}</span></div>}</div></div>)}{!cards.length && <div className="empty-state">No hay calificaciones para mostrar.</div>}</div>
     </>
   )
 }

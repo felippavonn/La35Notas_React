@@ -136,6 +136,9 @@ const DEMO_MIS_NOTAS = [
     bim1: 9,
     bim2: 9,
     cuat1: 9,
+    bim3: 8,
+    bim4: 7,
+    cuat2: 8,
     final: 9,
   },
   {
@@ -144,6 +147,9 @@ const DEMO_MIS_NOTAS = [
     bim1: 8,
     bim2: 7,
     cuat1: 8,
+    bim3: 6,
+    bim4: 8,
+    cuat2: 7,
     final: 8,
   },
 ]
