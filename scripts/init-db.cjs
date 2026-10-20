@@ -4,7 +4,7 @@ const { Pool } = require('pg');
 
 async function main() {
     const sql = fs.readFileSync(
-        path.join(__dirname, '..', 'schema.sql'),
+        path.join(__dirname, '..', 'database/schema.sql'),
         'utf8'
     );
 
