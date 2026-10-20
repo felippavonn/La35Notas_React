@@ -1,0 +1,7 @@
+node_modules/
+dist/
+.env
+.vite/
+*.log
+EXAMEN_PROYECTO.txt
+examinar_proyecto.bat
