@@ -1,6 +1,6 @@
 const DEMO_MODE = false
 
-const API_BASE = import.meta.env.VITE_API_URL || '/api'
+const API_BASE = process.env.VITE_API_URL || '/api'
 
 let token = localStorage.getItem('gestion_notas_token') || ''
 
