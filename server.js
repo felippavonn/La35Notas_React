@@ -60,9 +60,14 @@ async function auth(req, res, next) {
 
 function roles(...allowed) {
   return (req, res, next) => {
+    if (!req.user || !req.user.rol) {
+      return fail(res, 403, 'El usuario no tiene un rol asignado')
+    }
+
     if (!allowed.includes(req.user.rol)) {
       return fail(res, 403, 'No tenés permisos para esta operación')
     }
+
     next()
   }
 }
@@ -430,6 +435,30 @@ async function ensureDemoUsers() {
       ON CONFLICT DO NOTHING
     `, [roleId.profesor])
   }
+
+  await pool.query(`
+  UPDATE usuario
+  SET id_rol = $1
+  WHERE nombre_usuario = 'admin'
+`, [roleId.admin])
+
+await pool.query(`
+  UPDATE usuario
+  SET id_rol = $1
+  WHERE nombre_usuario = '31928371'
+`, [roleId.profesor])
+
+await pool.query(`
+  UPDATE usuario
+  SET id_rol = $1
+  WHERE nombre_usuario = '96103383'
+`, [roleId.alumno])
+
+await pool.query(`
+  UPDATE usuario
+  SET id_rol = $1
+  WHERE nombre_usuario = 'preceptor'
+`, [roleId.preceptor])
 }
 
 const distPath = path.join(__dirname, 'dist')
