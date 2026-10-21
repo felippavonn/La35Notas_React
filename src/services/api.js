@@ -1,4 +1,6 @@
-const DEMO_MODE = false
+import { TURNOS_OFICIALES } from '../data/turnos'
+
+const DEMO_MODE = import.meta.env.VITE_DEMO_MODE === 'true'
 
 const API_BASE = import.meta.env.VITE_API_URL || '/api'
 
@@ -16,6 +18,31 @@ const DEMO_USER = {
   dni_profesor: null,
 }
 
+const DEMO_ACCOUNTS = {
+  admin: DEMO_USER,
+  '31928371': {
+    id_usuario: 2,
+    rol: 'profesor',
+    nombre: 'Moya, Juan',
+    dni_alumno: null,
+    dni_profesor: '31928371',
+  },
+  '96103383': {
+    id_usuario: 3,
+    rol: 'alumno',
+    nombre: 'Rodriguez, Luis',
+    dni_alumno: '96103383',
+    dni_profesor: null,
+  },
+  preceptor: {
+    id_usuario: 4,
+    rol: 'preceptor',
+    nombre: 'Preceptor',
+    dni_alumno: null,
+    dni_profesor: null,
+  },
+}
+
 const DEMO_ALUMNOS = [
   {
     dni: '45123456',
@@ -23,7 +50,7 @@ const DEMO_ALUMNOS = [
     apellido: 'Pérez',
     email: 'juan@mail.com',
     estado: 'Activo',
-    id_curso: 1,
+    id_curso: 11,
     anio: 6,
     division: '1',
     ciclo_lectivo: 2026,
@@ -35,7 +62,7 @@ const DEMO_ALUMNOS = [
     apellido: 'Gómez',
     email: 'martina@mail.com',
     estado: 'Activo',
-    id_curso: 1,
+    id_curso: 11,
     anio: 6,
     division: '1',
     ciclo_lectivo: 2026,
@@ -47,9 +74,9 @@ const DEMO_ALUMNOS = [
     apellido: 'Rodríguez',
     email: 'lucas@mail.com',
     estado: 'Activo',
-    id_curso: 2,
+    id_curso: 12,
     anio: 6,
-    division: '2',
+    division: '1',
     ciclo_lectivo: 2026,
     promedio: 7.4,
   },
@@ -59,9 +86,9 @@ const DEMO_ALUMNOS = [
     apellido: 'Fernández',
     email: 'sofia@mail.com',
     estado: 'Activo',
-    id_curso: 2,
+    id_curso: 12,
     anio: 6,
-    division: '2',
+    division: '1',
     ciclo_lectivo: 2026,
     promedio: 6.8,
   },
@@ -82,20 +109,39 @@ const DEMO_DOCENTES = [
   },
 ]
 
-const DEMO_CURSOS = [
-  {
-    id_curso: 1,
-    anio: 6,
-    division: '1',
-    ciclo_lectivo: 2026,
-  },
-  {
-    id_curso: 2,
-    anio: 6,
-    division: '2',
-    ciclo_lectivo: 2026,
-  },
-]
+let DEMO_CURSOS = Array.from({ length: 6 }, (_, index) => {
+  const anio = index + 1
+  const idCursoAutomotores = index * 2 + 1
+  const idCursoComputacion = idCursoAutomotores + 1
+  const cantidadAlumnos = anio === 6 ? 2 : 0
+  const turnoAutomotores = TURNOS_OFICIALES[Math.floor(Math.random() * TURNOS_OFICIALES.length)]
+  const turnoComputacion = anio === 6
+    ? TURNOS_OFICIALES.find((turno) => turno.jornada === 'Mañana')
+    : TURNOS_OFICIALES[Math.floor(Math.random() * TURNOS_OFICIALES.length)]
+
+  return [
+    {
+      id_curso: idCursoAutomotores,
+      anio,
+      division: '1',
+      especialidad: 'Automotores',
+      turno: turnoAutomotores.jornada,
+      turno_id: turnoAutomotores.id_turno,
+      ciclo_lectivo: 2026,
+      cantidad_alumnos: cantidadAlumnos,
+    },
+    {
+      id_curso: idCursoComputacion,
+      anio,
+      division: '1',
+      especialidad: 'Computación',
+      turno: turnoComputacion.jornada,
+      turno_id: turnoComputacion.id_turno,
+      ciclo_lectivo: 2026,
+      cantidad_alumnos: cantidadAlumnos,
+    },
+  ]
+}).flat()
 
 const DEMO_MATERIAS = [
   {
@@ -156,16 +202,24 @@ const DEMO_MIS_NOTAS = [
 
 const DEMO_NOTIFICACIONES = [
   {
-    id_notificacion: 1,
-    titulo: 'Nueva calificación',
-    mensaje: 'Se registró una nueva calificación.',
-    leida: false,
+    id_nota: 1,
+    nombre: 'Juan',
+    apellido: 'Pérez',
+    materia: 'Programación',
+    tipo_evaluacion: '1er Bimestre',
+    calificacion: 9,
+    fecha: '2026-03-10',
+    tipo: 'Informe',
   },
   {
-    id_notificacion: 2,
-    titulo: 'Recordatorio',
-    mensaje: 'Hay notas pendientes de revisar.',
-    leida: false,
+    id_nota: 2,
+    nombre: 'Lucas',
+    apellido: 'Rodríguez',
+    materia: 'Matemática',
+    tipo_evaluacion: '1er Bimestre',
+    calificacion: 5,
+    fecha: '2026-03-08',
+    tipo: 'Crítica',
   },
 ]
 
@@ -270,13 +324,9 @@ export async function login(usuario, contrasenia) {
   // ===============================================
 
   if (DEMO_MODE) {
-    if (!usuario || !contrasenia) {
-      throw new Error('Ingresá usuario y contraseña')
-    }
-
-    const demoUser = {
-      ...DEMO_USER,
-      nombre: usuario,
+    const demoUser = DEMO_ACCOUNTS[usuario]
+    if (!demoUser || contrasenia !== '1234') {
+      throw new Error('Usuario o contraseña incorrectos. En demo, la contraseña es 1234.')
     }
 
     setToken('demo-token')
@@ -387,6 +437,61 @@ async function demoApiFetch(path, options = {}) {
 
   if (path === '/cursos' && method === 'GET') {
     return [...DEMO_CURSOS]
+  }
+
+  if (path === '/cursos' && method === 'POST') {
+    const body = JSON.parse(options.body || '{}')
+    const anio = Number(body.anio)
+    if (DEMO_CURSOS.some((curso) => curso.anio === anio && curso.especialidad === body.especialidad && curso.ciclo_lectivo === 2026)) {
+      throw new Error('Ya existe ese curso en el ciclo lectivo actual')
+    }
+    const turno = TURNOS_OFICIALES.find((item) => item.id_turno === Number(body.turno_id)) || null
+    const curso = {
+      id_curso: Math.max(0, ...DEMO_CURSOS.map((item) => item.id_curso)) + 1,
+      anio,
+      division: '1',
+      especialidad: body.especialidad,
+      ciclo_lectivo: 2026,
+      cantidad_alumnos: 0,
+      turno: turno?.jornada || null,
+      turno_id: turno?.id_turno || null,
+    }
+    DEMO_CURSOS.push(curso)
+    return { ...curso }
+  }
+
+  const courseMatch = path.match(/^\/cursos\/(\d+)$/)
+  if (courseMatch && method === 'PUT') {
+    const idCurso = Number(courseMatch[1])
+    const curso = DEMO_CURSOS.find((item) => item.id_curso === idCurso)
+    if (!curso) throw new Error('Curso no encontrado')
+    const body = JSON.parse(options.body || '{}')
+    const anio = Number(body.anio)
+    if (DEMO_CURSOS.some((item) => item.id_curso !== idCurso && item.anio === anio && item.especialidad === body.especialidad && item.ciclo_lectivo === 2026)) {
+      throw new Error('Ya existe ese curso en el ciclo lectivo actual')
+    }
+    const turno = TURNOS_OFICIALES.find((item) => item.id_turno === Number(body.turno_id)) || null
+    Object.assign(curso, {
+      anio,
+      division: '1',
+      especialidad: body.especialidad,
+      turno: turno?.jornada || null,
+      turno_id: turno?.id_turno || null,
+    })
+    return { ...curso }
+  }
+
+  if (courseMatch && method === 'DELETE') {
+    const idCurso = Number(courseMatch[1])
+    if (DEMO_ALUMNOS.some((alumno) => alumno.id_curso === idCurso)) {
+      throw new Error('No se puede eliminar un curso con alumnos o notas asociadas')
+    }
+    DEMO_CURSOS = DEMO_CURSOS.filter((curso) => curso.id_curso !== idCurso)
+    return { ok: true }
+  }
+
+  if (path === '/turnos' && method === 'GET') {
+    return TURNOS_OFICIALES.map((turno) => ({ ...turno }))
   }
 
   // ===============================================

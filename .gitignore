@@ -1,0 +1,41 @@
+# Dependencies
+node_modules/
+.pnp/
+.pnp.*
+
+# Vite and build output
+dist/
+coverage/
+.vite/
+.wrangler/
+
+# Local environment variables; keep the template tracked
+.env
+.env.*
+!.env.example
+!.env.*.example
+
+# Logs and runtime files
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+*.pid
+*.pid.lock
+
+# Local caches and temporary files
+.cache/
+.eslintcache
+*.tsbuildinfo
+tmp/
+temp/
+
+# Editor and operating-system files
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+*.swo

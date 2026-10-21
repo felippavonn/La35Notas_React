@@ -7,13 +7,25 @@ async function main() {
         path.join(__dirname, '..', 'database/schema.sql'),
         'utf8'
     );
+    const migration = fs.readFileSync(
+        path.join(__dirname, '..', 'database/migrate-cycle-lectivo.sql'),
+        'utf8'
+    );
+    const specialtyMigration = fs.readFileSync(
+        path.join(__dirname, '..', 'database/migrate-especialidades.sql'),
+        'utf8'
+    );
 
     const pool = new Pool({
         connectionString: process.env.DATABASE_URL,
-        ssl: { rejectUnauthorized: false }
+        ssl: process.env.DATABASE_SSL === 'true'
+            ? { rejectUnauthorized: false }
+            : undefined
     });
 
     try {
+        await pool.query(migration);
+        await pool.query(specialtyMigration);
         await pool.query(sql);
         console.log('Esquema de la base de datos aplicado correctamente.');
     } finally {

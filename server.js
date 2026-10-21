@@ -14,12 +14,21 @@ const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 
 const app = express()
-app.use(cors())
+const corsOrigins = (process.env.CORS_ORIGIN || '')
+  .split(',')
+  .map((origin) => origin.trim())
+  .filter(Boolean)
+
+app.use(cors({
+  origin: (origin, callback) => {
+    callback(null, !corsOrigins.length || !origin || corsOrigins.includes(origin))
+  },
+}))
 app.use(express.json())
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
-  ssl: process.env.DATABASE_URL
+  ssl: process.env.DATABASE_SSL === 'true'
     ? { rejectUnauthorized: false }
     : undefined,
 })
@@ -125,45 +134,65 @@ app.get('/api/me', auth, (req, res) => res.json(req.user))
 
 app.get('/api/dashboard', auth, async (_req, res) => {
   try {
-    const alumnos = await pool.query(`SELECT COUNT(*)::int AS total FROM alumno WHERE estado='Activo'`)
-    const aprobados = await pool.query(`
-      SELECT COUNT(*)::int AS total
-      FROM (
-        SELECT dni_alumno
-        FROM nota
-        GROUP BY dni_alumno, codigo_materia
-        HAVING AVG(calificacion) >= 6
-      ) x
+    const { rows } = await pool.query(`
+      WITH ciclo_actual AS (
+        SELECT id_ciclo_lectivo
+        FROM ciclo_lectivo
+        ORDER BY anio DESC
+        LIMIT 1
+      ), promedios AS (
+        SELECT n.dni_alumno, n.codigo_materia, AVG(n.calificacion) AS promedio
+        FROM nota n
+        JOIN ciclo_actual ca ON ca.id_ciclo_lectivo=n.id_ciclo_lectivo
+        GROUP BY n.dni_alumno, n.codigo_materia
+      )
+      SELECT
+        (SELECT COUNT(DISTINCT a.dni)::int
+         FROM alumno a
+         JOIN alumno_curso ac ON ac.dni_alumno=a.dni
+         JOIN ciclo_actual ca ON ca.id_ciclo_lectivo=ac.id_ciclo_lectivo
+         WHERE a.estado='Activo' AND ac.fecha_baja IS NULL) AS alumnos_activos,
+        (SELECT COUNT(*)::int FROM promedios WHERE promedio >= 6) AS aprobados,
+        (SELECT COUNT(*)::int
+         FROM nota n
+         JOIN ciclo_actual ca ON ca.id_ciclo_lectivo=n.id_ciclo_lectivo
+         WHERE n.observacion IS NOT NULL AND BTRIM(n.observacion) <> '') AS contenidos_incompletos
     `)
-    const incompletos = await pool.query(`
-      SELECT COUNT(*)::int AS total
-      FROM nota
-      WHERE observacion IS NOT NULL AND BTRIM(observacion) <> ''
-    `).catch(() => ({ rows: [{ total: 0 }] }))
-
-    res.json({
-      alumnos_activos: alumnos.rows[0].total,
-      aprobados: aprobados.rows[0].total,
-      contenidos_incompletos: incompletos.rows[0].total,
-    })
+    res.json(rows[0])
   } catch (error) {
     console.error(error)
     fail(res, 500, 'No se pudo obtener el panel')
   }
 })
 
-app.get('/api/alumnos', auth, async (_req, res) => {
+app.get('/api/alumnos', auth, async (req, res) => {
   try {
+    const cicloLectivo = Number(req.query.ciclo_lectivo) || null
     const { rows } = await pool.query(`
       SELECT a.dni, a.nombre, a.apellido, a.email, a.estado,
-             c.id_curso, c.anio, c.division, c.ciclo_lectivo,
+             c.id_curso, c.anio, c.division, cl.anio AS ciclo_lectivo,
              COALESCE(ROUND(AVG(n.calificacion), 1), 0) AS promedio
       FROM alumno a
-      LEFT JOIN curso c ON c.id_curso = a.id_curso
+      LEFT JOIN LATERAL (
+        SELECT ac.*
+        FROM alumno_curso ac
+        WHERE ac.dni_alumno=a.dni
+          AND ac.id_ciclo_lectivo=(
+            SELECT id_ciclo_lectivo FROM ciclo_lectivo
+            WHERE ($1::integer IS NULL OR anio=$1)
+            ORDER BY anio DESC LIMIT 1
+          )
+        ORDER BY ac.fecha_inscripcion DESC, ac.fecha_baja NULLS FIRST
+        LIMIT 1
+      ) ac ON TRUE
+      LEFT JOIN curso c ON c.id_curso = ac.id_curso
+      LEFT JOIN ciclo_lectivo cl ON cl.id_ciclo_lectivo = ac.id_ciclo_lectivo
       LEFT JOIN nota n ON n.dni_alumno = a.dni
-      GROUP BY a.dni, c.id_curso
+        AND n.id_ciclo_lectivo = ac.id_ciclo_lectivo
+        AND n.id_curso = ac.id_curso
+      GROUP BY a.dni, c.id_curso, cl.anio
       ORDER BY a.apellido, a.nombre
-    `)
+    `, [cicloLectivo])
     res.json(rows)
   } catch (error) {
     console.error(error)
@@ -177,17 +206,30 @@ app.post('/api/alumnos', auth, roles('admin', 'preceptor'), async (req, res) => 
     return fail(res, 400, 'DNI, nombre y apellido son obligatorios')
   }
 
+  const client = await pool.connect()
   try {
-    const { rows } = await pool.query(`
-      INSERT INTO alumno (dni, nombre, apellido, email, estado, id_curso)
-      VALUES ($1,$2,$3,$4,$5,$6)
+    await client.query('BEGIN')
+    const { rows } = await client.query(`
+      INSERT INTO alumno (dni, nombre, apellido, email, estado)
+      VALUES ($1,$2,$3,$4,$5)
       RETURNING *
-    `, [dni, nombre, apellido, email || null, estado, id_curso || null])
+    `, [dni, nombre, apellido, email || null, estado])
+    if (id_curso) {
+      await client.query(`
+        INSERT INTO alumno_curso (dni_alumno, id_curso, id_ciclo_lectivo)
+        SELECT $1, $2, id_ciclo_lectivo
+        FROM ciclo_lectivo ORDER BY anio DESC LIMIT 1
+      `, [dni, id_curso])
+    }
+    await client.query('COMMIT')
     res.status(201).json(rows[0])
   } catch (error) {
+    await client.query('ROLLBACK')
     console.error(error)
     if (error.code === '23505') return fail(res, 409, 'Ya existe un alumno con ese DNI')
     fail(res, 400, 'No se pudo crear el alumno')
+  } finally {
+    client.release()
   }
 })
 
@@ -195,23 +237,63 @@ app.put('/api/alumnos/:dni', auth, roles('admin', 'preceptor'), async (req, res)
   const { dni } = req.params
   const { nombre, apellido, email, estado, id_curso } = req.body
 
+  const client = await pool.connect()
   try {
-    const { rows } = await pool.query(`
+    await client.query('BEGIN')
+    const { rows } = await client.query(`
       UPDATE alumno
       SET nombre=COALESCE($2,nombre),
           apellido=COALESCE($3,apellido),
           email=COALESCE($4,email),
-          estado=COALESCE($5,estado),
-          id_curso=COALESCE($6,id_curso)
+          estado=COALESCE($5,estado)
       WHERE dni=$1
       RETURNING *
-    `, [dni, nombre, apellido, email, estado, id_curso])
+    `, [dni, nombre, apellido, email, estado])
 
-    if (!rows[0]) return fail(res, 404, 'Alumno no encontrado')
+    if (!rows[0]) {
+      await client.query('ROLLBACK')
+      return fail(res, 404, 'Alumno no encontrado')
+    }
+    if (id_curso !== undefined) {
+      const currentCycle = await client.query(
+        'SELECT id_ciclo_lectivo FROM ciclo_lectivo ORDER BY anio DESC LIMIT 1',
+      )
+      if (currentCycle.rows[0]) {
+        if (id_curso) {
+          await client.query(`
+            UPDATE alumno_curso
+            SET fecha_baja=CURRENT_DATE
+            WHERE dni_alumno=$1
+              AND id_ciclo_lectivo=$2
+              AND fecha_baja IS NULL
+              AND id_curso<>$3
+          `, [dni, id_curso, currentCycle.rows[0].id_ciclo_lectivo])
+          await client.query(`
+            INSERT INTO alumno_curso (dni_alumno, id_curso, id_ciclo_lectivo)
+            SELECT $1,$2,$3
+            WHERE NOT EXISTS (
+              SELECT 1 FROM alumno_curso
+              WHERE dni_alumno=$1 AND id_curso=$2 AND id_ciclo_lectivo=$3
+                AND fecha_baja IS NULL
+            )
+          `, [dni, id_curso, currentCycle.rows[0].id_ciclo_lectivo])
+        } else {
+          await client.query(`
+            UPDATE alumno_curso SET fecha_baja=CURRENT_DATE
+            WHERE dni_alumno=$1 AND id_ciclo_lectivo=$2
+              AND fecha_baja IS NULL
+          `, [dni, currentCycle.rows[0].id_ciclo_lectivo])
+        }
+      }
+    }
+    await client.query('COMMIT')
     res.json(rows[0])
   } catch (error) {
+    await client.query('ROLLBACK')
     console.error(error)
     fail(res, 400, 'No se pudo modificar el alumno')
+  } finally {
+    client.release()
   }
 })
 
@@ -220,11 +302,15 @@ app.get('/api/docentes', auth, async (_req, res) => {
     const { rows } = await pool.query(`
       SELECT p.dni, p.nombre, p.apellido, p.email, p.telefono,
              COALESCE(string_agg(DISTINCT m.nombre, ', '), '') AS materias,
-             COALESCE(string_agg(DISTINCT c.anio || '° ' || c.division, ', '), '') AS cursos
+              COALESCE(string_agg(DISTINCT c.anio || '° ' || c.division || ' ' || e.nombre, ', '), '') AS cursos
       FROM profesor p
       LEFT JOIN profesor_curso_materia pcm ON pcm.dni_profesor=p.dni
+        AND pcm.id_ciclo_lectivo=(
+          SELECT id_ciclo_lectivo FROM ciclo_lectivo ORDER BY anio DESC LIMIT 1
+        )
       LEFT JOIN materia m ON m.codigo=pcm.codigo_materia
       LEFT JOIN curso c ON c.id_curso=pcm.id_curso
+      LEFT JOIN especialidad e ON e.id_especialidad=c.id_especialidad
       GROUP BY p.dni
       ORDER BY p.apellido, p.nombre
     `)
@@ -235,21 +321,211 @@ app.get('/api/docentes', auth, async (_req, res) => {
   }
 })
 
-app.get('/api/cursos', auth, async (_req, res) => {
+app.get('/api/cursos', auth, async (req, res) => {
   try {
+    const cicloLectivo = Number(req.query.ciclo_lectivo) || null
     const { rows } = await pool.query(`
-      SELECT c.*, t.jornada,
-             COUNT(a.dni)::int AS cantidad_alumnos
+      SELECT c.*,
+             COUNT(a.dni)::int AS cantidad_alumnos,
+         cl.anio AS ciclo_lectivo,
+             e.nombre AS especialidad,
+         t.id_turno AS turno_id,
+             t.jornada AS turno
       FROM curso c
-      LEFT JOIN turno t ON t.id_turno=c.id_turno
-      LEFT JOIN alumno a ON a.id_curso=c.id_curso AND a.estado='Activo'
-      GROUP BY c.id_curso, t.jornada
+      JOIN especialidad e ON e.id_especialidad=c.id_especialidad
+      JOIN ciclo_lectivo cl ON cl.id_ciclo_lectivo=c.id_ciclo_lectivo
+      LEFT JOIN alumno_curso ac ON ac.id_curso=c.id_curso
+        AND ac.id_ciclo_lectivo=c.id_ciclo_lectivo
+        AND ac.fecha_baja IS NULL
+      LEFT JOIN alumno a ON a.dni=ac.dni_alumno AND a.estado='Activo'
+      LEFT JOIN curso_turno ct ON ct.id_curso=c.id_curso
+      LEFT JOIN turno t ON t.id_turno=ct.id_turno
+      GROUP BY c.id_curso, cl.anio, e.nombre, t.id_turno, t.jornada
+      HAVING cl.anio=COALESCE($1::integer, (SELECT MAX(anio) FROM ciclo_lectivo))
       ORDER BY c.anio, c.division
-    `)
+    `, [cicloLectivo])
     res.json(rows)
   } catch (error) {
     console.error(error)
     fail(res, 500, 'No se pudieron obtener los cursos')
+  }
+})
+
+app.post('/api/cursos', auth, roles('admin'), async (req, res) => {
+  const anio = Number(req.body.anio)
+  const { especialidad } = req.body
+  const turnoId = req.body.turno_id == null || req.body.turno_id === ''
+    ? null
+    : Number(req.body.turno_id)
+
+  if (!Number.isInteger(anio) || anio < 1 || anio > 6) {
+    return fail(res, 400, 'El año debe estar entre 1 y 6')
+  }
+  if (!['Automotores', 'Computación'].includes(especialidad)) {
+    return fail(res, 400, 'La especialidad no es válida')
+  }
+  if (turnoId !== null && !Number.isInteger(turnoId)) {
+    return fail(res, 400, 'El turno no es válido')
+  }
+
+  const client = await pool.connect()
+  try {
+    await client.query('BEGIN')
+    const specialtyResult = await client.query(
+      'SELECT id_especialidad FROM especialidad WHERE nombre=$1',
+      [especialidad],
+    )
+    const cycleResult = await client.query(
+      'SELECT id_ciclo_lectivo FROM ciclo_lectivo ORDER BY anio DESC LIMIT 1',
+    )
+    if (!cycleResult.rows[0]) {
+      await client.query('ROLLBACK')
+      return fail(res, 400, 'No hay un ciclo lectivo configurado')
+    }
+
+    const { rows } = await client.query(`
+      INSERT INTO curso (anio, division, id_ciclo_lectivo, id_especialidad)
+      VALUES ($1,'1',$2,$3)
+      RETURNING *
+    `, [anio, cycleResult.rows[0].id_ciclo_lectivo, specialtyResult.rows[0]?.id_especialidad])
+
+    if (turnoId !== null) {
+      await client.query(
+        'INSERT INTO curso_turno (id_curso, id_turno) VALUES ($1,$2)',
+        [rows[0].id_curso, turnoId],
+      )
+    }
+    await client.query('COMMIT')
+    res.status(201).json({ ...rows[0], especialidad, turno_id: turnoId })
+  } catch (error) {
+    await client.query('ROLLBACK')
+    if (error.code === '23505') return fail(res, 409, 'Ya existe ese curso en el ciclo lectivo actual')
+    if (error.code === '23503') return fail(res, 400, 'El turno o la especialidad no existen')
+    console.error(error)
+    fail(res, 400, 'No se pudo crear el curso')
+  } finally {
+    client.release()
+  }
+})
+
+app.put('/api/cursos/:id', auth, roles('admin'), async (req, res) => {
+  const idCurso = Number(req.params.id)
+  const anio = Number(req.body.anio)
+  const { especialidad } = req.body
+  const turnoId = req.body.turno_id == null || req.body.turno_id === ''
+    ? null
+    : Number(req.body.turno_id)
+
+  if (!Number.isInteger(idCurso) || !Number.isInteger(anio) || anio < 1 || anio > 6) {
+    return fail(res, 400, 'El curso o el año no son válidos')
+  }
+  if (!['Automotores', 'Computación'].includes(especialidad)) {
+    return fail(res, 400, 'La especialidad no es válida')
+  }
+  if (turnoId !== null && !Number.isInteger(turnoId)) {
+    return fail(res, 400, 'El turno no es válido')
+  }
+
+  const client = await pool.connect()
+  try {
+    await client.query('BEGIN')
+    const specialtyResult = await client.query(
+      'SELECT id_especialidad FROM especialidad WHERE nombre=$1',
+      [especialidad],
+    )
+    const cycleResult = await client.query(
+      'SELECT id_ciclo_lectivo FROM ciclo_lectivo ORDER BY anio DESC LIMIT 1',
+    )
+    if (!cycleResult.rows[0]) {
+      await client.query('ROLLBACK')
+      return fail(res, 400, 'No hay un ciclo lectivo configurado')
+    }
+
+    const { rows } = await client.query(`
+      UPDATE curso
+      SET anio=$2, division='1', id_especialidad=$3
+      WHERE id_curso=$1 AND id_ciclo_lectivo=$4
+      RETURNING *
+    `, [idCurso, anio, specialtyResult.rows[0]?.id_especialidad, cycleResult.rows[0].id_ciclo_lectivo])
+    if (!rows[0]) {
+      await client.query('ROLLBACK')
+      return fail(res, 404, 'Curso no encontrado en el ciclo lectivo actual')
+    }
+
+    if (turnoId === null) {
+      await client.query('DELETE FROM curso_turno WHERE id_curso=$1', [idCurso])
+    } else {
+      await client.query(`
+        INSERT INTO curso_turno (id_curso, id_turno)
+        VALUES ($1,$2)
+        ON CONFLICT (id_curso) DO UPDATE SET id_turno=EXCLUDED.id_turno
+      `, [idCurso, turnoId])
+    }
+    await client.query('COMMIT')
+    res.json({ ...rows[0], especialidad, turno_id: turnoId })
+  } catch (error) {
+    await client.query('ROLLBACK')
+    if (error.code === '23505') return fail(res, 409, 'Ya existe ese curso en el ciclo lectivo actual')
+    if (error.code === '23503') return fail(res, 400, 'El turno o la especialidad no existen')
+    console.error(error)
+    fail(res, 400, 'No se pudo modificar el curso')
+  } finally {
+    client.release()
+  }
+})
+
+app.delete('/api/cursos/:id', auth, roles('admin'), async (req, res) => {
+  const idCurso = Number(req.params.id)
+  if (!Number.isInteger(idCurso)) return fail(res, 400, 'El curso no es válido')
+
+  try {
+    const { rows } = await pool.query(`
+      DELETE FROM curso
+      WHERE id_curso=$1
+        AND id_ciclo_lectivo=(SELECT id_ciclo_lectivo FROM ciclo_lectivo ORDER BY anio DESC LIMIT 1)
+      RETURNING id_curso
+    `, [idCurso])
+    if (!rows[0]) return fail(res, 404, 'Curso no encontrado en el ciclo lectivo actual')
+    res.json({ ok: true })
+  } catch (error) {
+    if (error.code === '23503') {
+      return fail(res, 409, 'No se puede eliminar un curso con alumnos o notas asociadas')
+    }
+    console.error(error)
+    fail(res, 400, 'No se pudo eliminar el curso')
+  }
+})
+
+app.get('/api/ciclos-lectivos', auth, async (_req, res) => {
+  try {
+    const { rows } = await pool.query(`
+      SELECT id_ciclo_lectivo, anio
+      FROM ciclo_lectivo
+      ORDER BY anio DESC
+    `)
+    res.json(rows)
+  } catch (error) {
+    console.error(error)
+    fail(res, 500, 'No se pudieron obtener los ciclos lectivos')
+  }
+})
+
+app.get('/api/turnos', auth, roles('admin'), async (_req, res) => {
+  try {
+    const { rows } = await pool.query(`
+      SELECT id_turno, jornada, entrada_prehora, hora_inicio, hora_fin, salida_poshora
+      FROM turno
+      ORDER BY CASE jornada
+        WHEN 'Mañana' THEN 1
+        WHEN 'Tarde' THEN 2
+        WHEN 'Noche' THEN 3
+        ELSE 4
+      END, jornada
+    `)
+    res.json(rows)
+  } catch (error) {
+    console.error(error)
+    fail(res, 500, 'No se pudieron obtener los turnos')
   }
 })
 
@@ -266,12 +542,13 @@ app.get('/api/materias', auth, async (_req, res) => {
 app.get('/api/notas', auth, async (req, res) => {
   try {
     const { curso, materia } = req.query
-    const params = []
-    let where = '1=1'
+    const cicloLectivo = Number(req.query.ciclo_lectivo) || null
+    const params = [cicloLectivo]
+    let where = 'cl.anio = COALESCE($1::integer, (SELECT MAX(anio) FROM ciclo_lectivo))'
 
     if (curso) {
       params.push(curso)
-      where += ` AND a.id_curso=$${params.length}`
+      where += ` AND ac.id_curso=$${params.length}`
     }
     if (materia) {
       params.push(materia)
@@ -281,12 +558,17 @@ app.get('/api/notas', auth, async (req, res) => {
     const { rows } = await pool.query(`
       SELECT a.dni, a.nombre, a.apellido,
              c.anio, c.division,
+              cl.anio AS ciclo_lectivo,
              n.codigo_materia, m.nombre AS materia,
              n.tipo_evaluacion, n.calificacion, n.fecha,
              n.observacion, n.dni_profesor
       FROM alumno a
-      LEFT JOIN curso c ON c.id_curso=a.id_curso
-      LEFT JOIN nota n ON n.dni_alumno=a.dni
+            JOIN alumno_curso ac ON ac.dni_alumno=a.dni
+            JOIN ciclo_lectivo cl ON cl.id_ciclo_lectivo=ac.id_ciclo_lectivo
+            JOIN curso c ON c.id_curso=ac.id_curso
+            LEFT JOIN nota n ON n.dni_alumno=a.dni
+         AND n.id_ciclo_lectivo=ac.id_ciclo_lectivo
+         AND n.id_curso=ac.id_curso
       LEFT JOIN materia m ON m.codigo=n.codigo_materia
       WHERE ${where}
       ORDER BY a.apellido, a.nombre, n.tipo_evaluacion
@@ -307,6 +589,7 @@ app.post('/api/notas', auth, roles('admin', 'profesor', 'preceptor'), async (req
     calificacion,
     observacion,
     fecha,
+    ciclo_lectivo,
   } = req.body
 
   if (!dni_alumno || !codigo_materia || !tipo_evaluacion || calificacion == null) {
@@ -318,12 +601,26 @@ app.post('/api/notas', auth, roles('admin', 'profesor', 'preceptor'), async (req
 
   try {
     const dniProfesor = req.user.dni_profesor || null
+    const enrollment = await pool.query(`
+      SELECT ac.id_curso, ac.id_ciclo_lectivo
+      FROM alumno_curso ac
+      JOIN ciclo_lectivo cl ON cl.id_ciclo_lectivo=ac.id_ciclo_lectivo
+      WHERE ac.dni_alumno=$1
+        AND ac.fecha_baja IS NULL
+        AND cl.anio=COALESCE($2::integer, (SELECT MAX(anio) FROM ciclo_lectivo))
+      LIMIT 1
+    `, [dni_alumno, Number(ciclo_lectivo) || null])
+    if (!enrollment.rows[0]) {
+      return fail(res, 400, 'El alumno no tiene curso asignado en ese ciclo lectivo')
+    }
+    const { id_curso, id_ciclo_lectivo } = enrollment.rows[0]
     const { rows } = await pool.query(`
       INSERT INTO nota
-        (dni_alumno,codigo_materia,tipo_evaluacion,calificacion,observacion,fecha,dni_profesor)
-      VALUES ($1,$2,$3,$4,$5,COALESCE($6,CURRENT_DATE),$7)
-      ON CONFLICT (dni_alumno,codigo_materia,tipo_evaluacion)
+        (dni_alumno,id_curso,id_ciclo_lectivo,codigo_materia,tipo_evaluacion,calificacion,observacion,fecha,dni_profesor)
+      VALUES ($1,$8,$9,$2,$3,$4,$5,COALESCE($6,CURRENT_DATE),$7)
+      ON CONFLICT (dni_alumno,codigo_materia,tipo_evaluacion,id_ciclo_lectivo)
       DO UPDATE SET
+        id_curso=EXCLUDED.id_curso,
         calificacion=EXCLUDED.calificacion,
         observacion=EXCLUDED.observacion,
         fecha=EXCLUDED.fecha,
@@ -337,6 +634,8 @@ app.post('/api/notas', auth, roles('admin', 'profesor', 'preceptor'), async (req
       observacion || null,
       fecha || null,
       dniProfesor,
+      id_curso,
+      id_ciclo_lectivo,
     ])
 
     res.status(201).json(rows[0])
@@ -356,7 +655,9 @@ app.get('/api/mis-notas', auth, roles('alumno'), async (req, res) => {
              MAX(n.calificacion) FILTER (WHERE n.tipo_evaluacion='FINAL') AS final
       FROM materia m
       JOIN nota n ON n.codigo_materia=m.codigo
+      JOIN ciclo_lectivo cl ON cl.id_ciclo_lectivo=n.id_ciclo_lectivo
       WHERE n.dni_alumno=$1
+        AND cl.anio=(SELECT MAX(anio) FROM ciclo_lectivo)
       GROUP BY m.codigo, m.nombre
       ORDER BY m.nombre
     `, [req.user.dni_alumno])
@@ -376,6 +677,8 @@ app.get('/api/notificaciones', auth, async (_req, res) => {
       FROM nota n
       JOIN alumno a ON a.dni=n.dni_alumno
       JOIN materia m ON m.codigo=n.codigo_materia
+      JOIN ciclo_lectivo cl ON cl.id_ciclo_lectivo=n.id_ciclo_lectivo
+      WHERE cl.anio=(SELECT MAX(anio) FROM ciclo_lectivo)
       ORDER BY n.fecha DESC, n.id_nota DESC
       LIMIT 30
     `)

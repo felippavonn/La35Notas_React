@@ -414,6 +414,16 @@ tbody td { padding: 11px 14px; font-size: 13.5px; }
   border: 1px solid var(--border); box-shadow: var(--shadow);
   overflow: hidden;
 }
+.course-card { cursor: default; transition: border-color .18s; }
+.course-card.selected { border-color: var(--accent); }
+.course-actions { display: flex; justify-content: flex-end; gap: 8px; padding: 0 14px 12px; }
+.course-students { margin-top: 24px; }
+.course-delete-warning {
+  margin-top: 18px; padding: 10px 12px; border-left: 3px solid var(--warn);
+  background: var(--warn-lt); color: var(--ink); font-size: 13px;
+}
+.btn-danger { background: var(--warn); color: #fff; border: 1px solid var(--warn); }
+.btn-danger:hover { filter: brightness(.94); }
 .materia-header {
   padding: 14px 16px; border-bottom: 1px solid var(--cream);
   display: flex; align-items: center; justify-content: space-between;

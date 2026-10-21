@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { apiFetch, clearSession, getStoredUser, login, logout, setStoredUser } from './services/api'
+import { apiFetch, clearSession, getStoredUser, login, logout } from './services/api'
 
 const DEMO_USERS = {
   admin: 'admin',
@@ -14,6 +14,8 @@ const ROLE_LABELS = {
   alumno: 'Alumno',
   preceptor: 'Preceptor',
 }
+
+const IS_DEMO_MODE = import.meta.env.VITE_DEMO_MODE === 'true'
 
 const EVALUACIONES = [
   ['BIMESTRE_1', '1er Bimestre'],
@@ -42,6 +44,7 @@ function App() {
   const [alumnos, setAlumnos] = useState([])
   const [docentes, setDocentes] = useState([])
   const [cursos, setCursos] = useState([])
+  const [turnos, setTurnos] = useState([])
   const [materias, setMaterias] = useState([])
   const [notas, setNotas] = useState([])
   const [dashboard, setDashboard] = useState({ alumnos_activos: 0, aprobados: 0, contenidos_incompletos: 0 })
@@ -56,7 +59,9 @@ function App() {
   const [notaPeriodo, setNotaPeriodo] = useState('BIMESTRE_1')
 
   const [modalAlumno, setModalAlumno] = useState(null)
+  const [modalCurso, setModalCurso] = useState(null)
   const [modalNota, setModalNota] = useState(null)
+  const [cursoForm, setCursoForm] = useState({ anio: '1', especialidad: 'Automotores', turno_id: '' })
   const [newAlumno, setNewAlumno] = useState({
     dni: '',
     nombre: '',
@@ -79,6 +84,7 @@ function App() {
 
   const isAlumno = session?.rol === 'alumno'
   const canManageStudents = session?.rol === 'admin' || session?.rol === 'preceptor'
+  const canManageCourses = session?.rol === 'admin'
   const canManageNotes = ['admin', 'profesor', 'preceptor'].includes(session?.rol)
 
   function pushToast(message, type = 'ok') {
@@ -92,15 +98,17 @@ function App() {
     setLoading(true)
     setGlobalError('')
     try {
-      const [dash, alumnosData, cursosData, materiasData] = await Promise.all([
+      const [dash, alumnosData, cursosData, turnosData, materiasData] = await Promise.all([
         apiFetch('/dashboard'),
         apiFetch('/alumnos'),
         apiFetch('/cursos'),
+        session.rol === 'admin' ? apiFetch('/turnos') : Promise.resolve([]),
         apiFetch('/materias'),
       ])
       setDashboard(dash)
       setAlumnos(alumnosData)
       setCursos(cursosData)
+      setTurnos(turnosData)
       setMaterias(materiasData)
 
       if (!isAlumno) {
@@ -162,6 +170,7 @@ function App() {
   function navigate(nextPage) {
     if (nextPage === 'alumnos' && isAlumno) return
     if (nextPage === 'notas' && !canManageNotes) return
+    if (nextPage === 'turnos' && session?.rol !== 'admin') return
     setPage(nextPage)
     setSidebarOpen(false)
   }
@@ -252,6 +261,54 @@ function App() {
         pushToast('Alumno actualizado')
       }
       setModalAlumno(null)
+      await loadCoreData()
+    } catch (error) {
+      pushToast(error.message, 'warn')
+    }
+  }
+
+  function openNewCurso() {
+    setCursoForm({ anio: '1', especialidad: 'Automotores', turno_id: '' })
+    setModalCurso({ mode: 'new' })
+  }
+
+  function openEditCurso(curso) {
+    setCursoForm({
+      anio: String(curso.anio),
+      especialidad: curso.especialidad,
+      turno_id: curso.turno_id ? String(curso.turno_id) : '',
+    })
+    setModalCurso({ mode: 'edit', curso })
+  }
+
+  async function saveCurso(event) {
+    event.preventDefault()
+    const body = {
+      anio: Number(cursoForm.anio),
+      especialidad: cursoForm.especialidad,
+      turno_id: cursoForm.turno_id || null,
+    }
+
+    try {
+      const isNew = modalCurso.mode === 'new'
+      await apiFetch(isNew ? '/cursos' : `/cursos/${modalCurso.curso.id_curso}`, {
+        method: isNew ? 'POST' : 'PUT',
+        body: JSON.stringify(body),
+      })
+      setModalCurso(null)
+      pushToast(isNew ? 'Curso creado' : 'Curso actualizado')
+      await loadCoreData()
+    } catch (error) {
+      pushToast(error.message, 'warn')
+    }
+  }
+
+  async function deleteCurso(curso) {
+    if (!window.confirm(`¿Eliminar ${curso.anio}° ${curso.division}° ${curso.especialidad}? No se puede deshacer. Los cursos con alumnos o notas asociadas no se pueden eliminar.`)) return
+    try {
+      await apiFetch(`/cursos/${curso.id_curso}`, { method: 'DELETE' })
+      setModalCurso(null)
+      pushToast('Curso eliminado')
       await loadCoreData()
     } catch (error) {
       pushToast(error.message, 'warn')
@@ -369,7 +426,9 @@ function App() {
           </button>
 
           <div className="login-hint">
-            Demo escolar: <kbd>1234</kbd> como contraseña. El rol solo completa el usuario de prueba; la autenticación real la decide PostgreSQL.
+            {IS_DEMO_MODE
+              ? <>Demo local: todos los usuarios usan <kbd>1234</kbd>. Los datos se mantienen en el navegador.</>
+              : <>Demo escolar: <kbd>1234</kbd> como contraseña. La autenticación real la decide PostgreSQL.</>}
           </div>
         </form>
       </div>
@@ -381,6 +440,7 @@ function App() {
     alumnos: 'Gestión de Alumnos',
     docentes: 'Docentes y Materias',
     cursos: 'Cursos y Divisiones',
+    turnos: 'Turnos y Horarios',
     notas: 'Carga de Calificaciones',
     consulta: isAlumno ? 'Mis Calificaciones' : 'Consulta de Calificaciones',
     notificaciones: 'Notificaciones y Alertas',
@@ -395,6 +455,9 @@ function App() {
       { id: 'docentes', label: 'Docentes', icon: '🏫' },
       { id: 'cursos', label: 'Cursos', icon: '📋' },
     ] : []),
+    ...(session?.rol === 'admin'
+      ? [{ id: 'turnos', label: 'Turnos', icon: '🕒' }]
+      : []),
     ...(canManageNotes ? [
       { id: 'notas', label: 'Carga de Notas', icon: '✏️' }
     ] : []),
@@ -410,7 +473,6 @@ function App() {
 
       <aside className={`sidebar ${sidebarOpen ? 'open' : ''}`}>
         <div className="sidebar-logo">la35<span>Notas</span></div>
-        <div className="sidebar-section">Principal</div>
         {visibleNav.map((item) => (
           <div key={item.id} className={`nav-item ${page === item.id ? 'active' : ''}`} onClick={() => navigate(item.id)}>
             <span className="nav-icon">{item.icon}</span>{item.label}
@@ -465,7 +527,16 @@ function App() {
           )}
 
           {page === 'docentes' && <DocentesPage docentes={docentes} />}
-          {page === 'cursos' && <CursosPage cursos={cursos} />}
+          {page === 'cursos' && (
+            <CursosPage
+              cursos={cursos}
+              alumnos={alumnos}
+              canManageCourses={canManageCourses}
+              openNewCurso={openNewCurso}
+              openEditCurso={openEditCurso}
+            />
+          )}
+          {page === 'turnos' && <TurnosPage turnos={turnos} />}
 
           {page === 'notas' && canManageNotes && (
             <NotasPage
@@ -499,9 +570,47 @@ function App() {
             <div className="field"><label>Apellido</label><input value={newAlumno.apellido} onChange={(e) => setNewAlumno({ ...newAlumno, apellido: e.target.value })} required /></div>
             <div className="field"><label>Nombre</label><input value={newAlumno.nombre} onChange={(e) => setNewAlumno({ ...newAlumno, nombre: e.target.value })} required /></div>
             <div className="field"><label>Email</label><input type="email" value={newAlumno.email} onChange={(e) => setNewAlumno({ ...newAlumno, email: e.target.value })} /></div>
-            <div className="field"><label>Curso</label><select value={newAlumno.id_curso} onChange={(e) => setNewAlumno({ ...newAlumno, id_curso: e.target.value })}><option value="">Sin curso</option>{cursos.map((curso) => <option key={curso.id_curso} value={curso.id_curso}>{curso.anio}° {curso.division} — {curso.jornada || ''}</option>)}</select></div>
+            <div className="field"><label>Curso</label><select value={newAlumno.id_curso} onChange={(e) => setNewAlumno({ ...newAlumno, id_curso: e.target.value })}><option value="">Sin curso</option>{cursos.map((curso) => <option key={curso.id_curso} value={curso.id_curso}>{curso.anio}° {curso.division} — {curso.especialidad || 'Sin especialidad'}</option>)}</select></div>
             <div className="field"><label>Estado</label><select value={newAlumno.estado} onChange={(e) => setNewAlumno({ ...newAlumno, estado: e.target.value })}><option>Activo</option><option>Egresado</option><option>Baja</option><option>Suspendido</option><option>Transferido</option></select></div>
             <div className="modal-footer"><button type="button" className="btn btn-ghost" onClick={() => setModalAlumno(null)}>Cancelar</button><button type="submit" className="btn btn-blue">Guardar ✓</button></div>
+          </form>
+        </div>
+      )}
+
+      {modalCurso && (
+        <div className="modal-overlay open" onMouseDown={(event) => event.target === event.currentTarget && setModalCurso(null)}>
+          <form className="modal" onSubmit={saveCurso}>
+            <div className="modal-title">{modalCurso.mode === 'new' ? 'Nuevo curso' : 'Editar curso'}</div>
+            <div className="field">
+              <label htmlFor="course-year">Año</label>
+              <select id="course-year" value={cursoForm.anio} onChange={(event) => setCursoForm({ ...cursoForm, anio: event.target.value })}>
+                {[1, 2, 3, 4, 5, 6].map((anio) => <option key={anio} value={anio}>{anio}°</option>)}
+              </select>
+            </div>
+            <div className="field">
+              <label htmlFor="course-specialty">Especialidad</label>
+              <select id="course-specialty" value={cursoForm.especialidad} onChange={(event) => setCursoForm({ ...cursoForm, especialidad: event.target.value })}>
+                <option value="Automotores">Automotores</option>
+                <option value="Computación">Computación</option>
+              </select>
+            </div>
+            <div className="field">
+              <label htmlFor="course-shift">Turno</label>
+              <select id="course-shift" value={cursoForm.turno_id} onChange={(event) => setCursoForm({ ...cursoForm, turno_id: event.target.value })}>
+                <option value="">Sin turno</option>
+                {turnos.map((turno) => <option key={turno.id_turno} value={turno.id_turno}>{turno.jornada}</option>)}
+              </select>
+            </div>
+            {modalCurso.mode === 'edit' && (
+              <div className="course-delete-warning" role="note">
+                Eliminar no se puede deshacer. No se pueden eliminar cursos con alumnos o notas asociadas.
+              </div>
+            )}
+            <div className="modal-footer">
+              {modalCurso.mode === 'edit' && <button type="button" className="btn btn-danger" onClick={() => deleteCurso(modalCurso.curso)}>Eliminar curso</button>}
+              <button type="button" className="btn btn-ghost" onClick={() => setModalCurso(null)}>Cancelar</button>
+              <button type="submit" className="btn btn-blue">Guardar curso</button>
+            </div>
           </form>
         </div>
       )}
@@ -700,11 +809,86 @@ function DocentesPage({ docentes }) {
   )
 }
 
-function CursosPage({ cursos }) {
+function CursosPage({ cursos, alumnos, canManageCourses, openNewCurso, openEditCurso }) {
+  const [selectedCourseId, setSelectedCourseId] = useState(null)
+  const selectedCourse = cursos.find((curso) => curso.id_curso === selectedCourseId)
+  const courseAlumnos = alumnos.filter((alumno) => String(alumno.id_curso) === String(selectedCourseId))
+
+  function toggleCourse(courseId) {
+    setSelectedCourseId((currentId) => currentId === courseId ? null : courseId)
+  }
+
   return (
     <>
-      <div className="section-header"><div className="section-title">Cursos y Divisiones</div></div>
-      <div className="my-notas-grid">{cursos.map((curso) => <div className="materia-card" key={curso.id_curso}><div className="materia-header"><div><div className="materia-name">{curso.anio}° {curso.division}</div><div className="materia-prof">{curso.jornada || 'Turno no especificado'}</div></div><span className="badge badge-blue">{curso.cantidad_alumnos} alumnos</span></div><div className="materia-body"><div className="nota-row"><span className="nota-row-label">Ciclo lectivo</span><span className="nota-row-val">{curso.ciclo_lectivo || '—'}</span></div><div className="nota-row"><span className="nota-row-label">Especialidad</span><span className="nota-row-val">{curso.especialidad || '—'}</span></div></div></div>)}{!cursos.length && <div className="empty-state">No hay cursos para mostrar.</div>}</div>
+      <div className="section-header">
+        <div className="section-title">Cursos y Divisiones</div>
+        {canManageCourses && <button className="btn btn-blue" onClick={openNewCurso}>+ Nuevo curso</button>}
+      </div>
+      <div className="my-notas-grid">
+        {cursos.map((curso) => {
+          const isSelected = selectedCourseId === curso.id_curso
+          const label = `${curso.anio}° ${curso.division}° ${curso.especialidad || 'Especialidad no especificada'}`
+          return (
+            <article key={curso.id_curso} className={`materia-card course-card ${isSelected ? 'selected' : ''}`}>
+              <div className="materia-header">
+                <div className="materia-name">{label}</div>
+                <span className="badge badge-blue">{curso.cantidad_alumnos ?? courseAlumnos.length} alumnos</span>
+              </div>
+              <div className="materia-body">
+                <div className="nota-row">
+                  <span className="nota-row-label">Turno</span>
+                  <span className="nota-row-val">{curso.turno || 'Sin turno asignado'}</span>
+                </div>
+              </div>
+              <div className="course-actions">
+                <button type="button" className="btn btn-ghost btn-sm" aria-expanded={isSelected} onClick={() => toggleCourse(curso.id_curso)}>{isSelected ? 'Ocultar alumnos' : 'Ver alumnos'}</button>
+                {canManageCourses && <button type="button" className="btn btn-ghost btn-sm" onClick={() => openEditCurso(curso)}>Editar</button>}
+              </div>
+            </article>
+          )
+        })}
+        {!cursos.length && <div className="empty-state">No hay cursos para mostrar.</div>}
+      </div>
+      {selectedCourse && (
+        <div className="course-students">
+          <div className="section-header">
+            <div className="section-title">Alumnos de {selectedCourse.anio}° {selectedCourse.division}° {selectedCourse.especialidad}</div>
+            <span className="badge badge-blue">{courseAlumnos.length} alumnos</span>
+          </div>
+          <div className="card">
+            <div className="table-wrap">
+              <table>
+                <thead><tr><th>DNI</th><th>Apellido y nombre</th><th>Estado</th><th>Promedio</th></tr></thead>
+                <tbody>
+                  {courseAlumnos.map((alumno) => (
+                    <tr key={alumno.dni}>
+                      <td>{alumno.dni}</td>
+                      <td><strong>{alumno.apellido}, {alumno.nombre}</strong></td>
+                      <td>{alumno.estado}</td>
+                      <td>{Number(alumno.promedio || 0).toFixed(1)}</td>
+                    </tr>
+                  ))}
+                  {!courseAlumnos.length && <tr><td colSpan="4"><div className="empty-state">Este curso todavía no tiene alumnos asignados.</div></td></tr>}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+  )
+}
+
+function TurnosPage({ turnos }) {
+  return (
+    <>
+      <div className="section-header"><div className="section-title">Turnos y Horarios</div></div>
+      <div className="card">
+        <div className="table-wrap"><table><thead><tr><th>Turno</th><th>Entrada prehoraria</th><th>Hora de inicio</th><th>Hora de finalización</th><th>Salida poshoraria</th></tr></thead><tbody>
+          {turnos.map((turno) => <tr key={turno.id_turno}><td><strong>{turno.jornada}</strong></td><td>{turno.entrada_prehora?.slice(0, 5) || '—'}</td><td>{turno.hora_inicio?.slice(0, 5) || '—'}</td><td>{turno.hora_fin?.slice(0, 5) || '—'}</td><td>{turno.salida_poshora?.slice(0, 5) || '—'}</td></tr>)}
+          {!turnos.length && <tr><td colSpan="5"><div className="empty-state">No hay turnos para mostrar.</div></td></tr>}
+        </tbody></table></div>
+      </div>
     </>
   )
 }
@@ -713,7 +897,7 @@ function NotasPage({ cursos, materias, notaCurso, setNotaCurso, notaMateria, set
   return (
     <>
       <div className="section-header"><div className="section-title">Carga de Calificaciones</div><span className="badge badge-blue">{EVALUACIONES.find(([key]) => key === notaPeriodo)?.[1] || 'Período'}</span></div>
-      <div className="card" style={{ marginBottom: 20 }}><div className="filters"><select value={notaCurso} onChange={(e) => setNotaCurso(e.target.value)}><option value="">Seleccionar curso…</option>{cursos.map((curso) => <option key={curso.id_curso} value={curso.id_curso}>{curso.anio}° {curso.division}</option>)}</select><select value={notaMateria} onChange={(e) => setNotaMateria(e.target.value)}><option value="">Seleccionar materia…</option>{materias.map((materia) => <option key={materia.codigo} value={materia.codigo}>{materia.nombre}</option>)}</select><select value={notaPeriodo} onChange={(e) => setNotaPeriodo(e.target.value)}>{EVALUACIONES.map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></div></div>
+      <div className="card" style={{ marginBottom: 20 }}><div className="filters"><select value={notaCurso} onChange={(e) => setNotaCurso(e.target.value)}><option value="">Seleccionar curso…</option>{cursos.map((curso) => <option key={curso.id_curso} value={curso.id_curso}>{curso.anio}° {curso.division} — {curso.especialidad || 'Sin especialidad'}</option>)}</select><select value={notaMateria} onChange={(e) => setNotaMateria(e.target.value)}><option value="">Seleccionar materia…</option>{materias.map((materia) => <option key={materia.codigo} value={materia.codigo}>{materia.nombre}</option>)}</select><select value={notaPeriodo} onChange={(e) => setNotaPeriodo(e.target.value)}>{EVALUACIONES.map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></div></div>
       {!notaCurso || !notaMateria ? <div className="empty-state large">Seleccioná curso y materia para cargar notas.</div> : 
         <div className="card">
           <div className="table-wrap">
