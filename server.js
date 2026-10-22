@@ -489,10 +489,12 @@ app.put('/api/alumnos/:dni', auth, roles('admin', 'preceptor'), async (req, res)
           `, [dni, cursoAsignado, currentCycleId])
           await client.query(`
             INSERT INTO alumno_curso (dni_alumno, id_curso, id_ciclo_lectivo)
-            SELECT $1,$2,$3
+            SELECT $1::varchar, $2::integer, $3::integer
             WHERE NOT EXISTS (
               SELECT 1 FROM alumno_curso
-              WHERE dni_alumno=$1 AND id_curso=$2 AND id_ciclo_lectivo=$3
+              WHERE dni_alumno = $1::varchar
+                AND id_curso = $2::integer
+                AND id_ciclo_lectivo = $3::integer
                 AND fecha_baja IS NULL
             )
           `, [dni, cursoAsignado, currentCycleId])
