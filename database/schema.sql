@@ -399,7 +399,7 @@ SELECT
     '1',
     crypt('1', gen_salt('bf', 10)),
     'Activo',
-    '00000000',
+    '1',
     id_rol
 FROM rol
 WHERE nombre = 'admin'
