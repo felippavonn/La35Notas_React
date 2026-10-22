@@ -377,3 +377,30 @@ BEGIN
         VALUES ('ciclo_materia_por_ciclo_v1');
     END IF;
 END $$;
+
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
+INSERT INTO administrador (dni, nombre, apellido, email, cargo)
+VALUES ('00000000', 'Admin', 'Sistema', 'admin@gestionnotas.test', 'Administrador')
+ON CONFLICT (dni) DO NOTHING;
+
+INSERT INTO rol (nombre, descripcion)
+VALUES ('admin', 'Acceso administrativo')
+ON CONFLICT (nombre) DO NOTHING;
+
+INSERT INTO usuario (
+    nombre_usuario,
+    contrasenia,
+    estado,
+    dni_administrador,
+    id_rol
+)
+SELECT
+    '00000000',
+    crypt('admin123', gen_salt('bf', 10)),
+    'Activo',
+    '00000000',
+    id_rol
+FROM rol
+WHERE nombre = 'admin'
+ON CONFLICT (nombre_usuario) DO NOTHING;
