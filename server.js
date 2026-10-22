@@ -33,8 +33,10 @@ if (isProduction && corsOrigins.length === 0) {
 }
 
 app.use(cors({
-  origin: (origin, callback) => callback(null, !origin || corsOrigins.includes(origin)),
-}))
+    origin: 'https://la35notas.matyzur.workers.dev',
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization']
+}));
 app.use(express.json({ limit: '1mb' }))
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
