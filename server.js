@@ -516,6 +516,85 @@ app.put('/api/alumnos/:dni', auth, roles('admin', 'preceptor'), async (req, res)
   }
 })
 
+
+app.delete('/api/alumnos/:dni', auth, roles('admin', 'preceptor'), async (req, res) => {
+  const { dni } = req.params
+  const client = await pool.connect()
+  let deletedUserId
+
+  try {
+    await client.query('BEGIN')
+
+    const alumno = await client.query(
+      'SELECT dni FROM alumno WHERE dni=$1 FOR UPDATE',
+      [dni],
+    )
+
+    if (!alumno.rows[0]) {
+      await client.query('ROLLBACK')
+      return fail(res, 404, 'Alumno no encontrado')
+    }
+
+    const { rows } = await client.query(`
+      SELECT
+        EXISTS(SELECT 1 FROM nota WHERE dni_alumno=$1) AS tiene_notas,
+        EXISTS(SELECT 1 FROM nota_individual WHERE dni_alumno=$1) AS tiene_notas_individuales,
+        EXISTS(SELECT 1 FROM notificacion_alumno WHERE dni_alumno=$1) AS tiene_notificaciones
+    `, [dni])
+
+    const datos = rows[0]
+
+    if (
+      datos.tiene_notas ||
+      datos.tiene_notas_individuales ||
+      datos.tiene_notificaciones
+    ) {
+      await client.query('ROLLBACK')
+      return fail(
+        res,
+        409,
+        'No se puede eliminar el alumno porque tiene notas o notificaciones asociadas.',
+      )
+    }
+
+    const cuenta = await client.query(
+      'SELECT id_usuario FROM usuario WHERE dni_alumno=$1',
+      [dni],
+    )
+
+    deletedUserId = cuenta.rows[0]?.id_usuario
+
+    await client.query('DELETE FROM usuario WHERE dni_alumno=$1', [dni])
+    await client.query('DELETE FROM alumno_curso WHERE dni_alumno=$1', [dni])
+    await client.query('DELETE FROM responsables_alumnos WHERE dni_alumno=$1', [dni])
+    await client.query('DELETE FROM alumno WHERE dni=$1', [dni])
+
+    await client.query('COMMIT')
+
+    if (deletedUserId) {
+      for (const [token, session] of tokens) {
+        if (session.id_usuario === deletedUserId) {
+          tokens.delete(token)
+        }
+      }
+    }
+
+    return res.json({ ok: true })
+  } catch (error) {
+    await client.query('ROLLBACK')
+    console.error('Error al eliminar alumno:', error)
+
+    if (error.code === '23503') {
+      return fail(res, 409, 'No se puede eliminar el alumno porque tiene otros datos asociados.')
+    }
+
+    return fail(res, 500, 'No se pudo eliminar el alumno.')
+  } finally {
+    client.release()
+  }
+})
+
+
 app.get('/api/docentes', auth, async (req, res) => {
   try {
     const cicloLectivo = requestedCycleYear(req)
