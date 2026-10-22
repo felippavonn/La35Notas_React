@@ -511,7 +511,7 @@ app.put('/api/alumnos/:dni', auth, roles('admin', 'preceptor'), async (req, res)
     res.json(rows[0])
   } catch (error) {
     await client.query('ROLLBACK')
-    console.error(error)
+    console.error('Error al modificar alumno:', error.message, error.code, error.detail)
     fail(res, 400, 'No se pudo modificar el alumno')
   } finally {
     client.release()
