@@ -381,7 +381,7 @@ END $$;
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
 INSERT INTO administrador (dni, nombre, apellido, email, cargo)
-VALUES ('00000000', 'Admin', 'Sistema', 'admin@gestionnotas.test', 'Administrador')
+VALUES ('1', 'Admin', 'Sistema', 'admin@gestionnotas.test', 'Regente')
 ON CONFLICT (dni) DO NOTHING;
 
 INSERT INTO rol (nombre, descripcion)
@@ -396,8 +396,8 @@ INSERT INTO usuario (
     id_rol
 )
 SELECT
-    '00000000',
-    crypt('admin123', gen_salt('bf', 10)),
+    '1',
+    crypt('1', gen_salt('bf', 10)),
     'Activo',
     '00000000',
     id_rol
