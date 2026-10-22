@@ -1116,7 +1116,50 @@ function App() {
             <div className="field"><label>Email</label><input type="email" value={newAlumno.email} onChange={(e) => setNewAlumno({ ...newAlumno, email: e.target.value })} /></div>
             <div className="field"><label>Curso</label><select value={newAlumno.id_curso} onChange={(e) => setNewAlumno({ ...newAlumno, id_curso: e.target.value })} disabled={newAlumno.estado !== 'Activo'}><option value="">Sin curso</option>{cursos.map((curso) => <option key={curso.id_curso} value={curso.id_curso}>{curso.anio}° {curso.division} — {curso.especialidad || 'Sin especialidad'}</option>)}</select></div>
             <div className="field"><label>Estado</label><select value={newAlumno.estado} onChange={(e) => setNewAlumno({ ...newAlumno, estado: e.target.value, id_curso: e.target.value === 'Activo' ? newAlumno.id_curso : '' })}>{ESTADOS_ALUMNO.map((estado) => <option key={estado}>{estado}</option>)}</select></div>
-            <div className="modal-footer"><button type="button" className="btn btn-ghost" onClick={() => setModalAlumno(null)}>Cancelar</button><button type="submit" className="btn btn-blue">Guardar ✓</button></div>
+            
+<div className="modal-footer">
+  {modalAlumno.mode === 'edit' && canManageStudents && (
+    <button
+      type="button"
+      className="btn btn-danger"
+      onClick={async () => {
+        const alumno = modalAlumno.alumno
+
+        if (!window.confirm(
+          `¿Seguro que querés eliminar a ${alumno.nombre} ${alumno.apellido}? Esta acción no se puede deshacer.`
+        )) return
+
+        try {
+          await apiFetch(
+            `/alumnos/${encodeURIComponent(alumno.dni)}`,
+            { method: 'DELETE' }
+          )
+
+          setModalAlumno(null)
+          await loadCoreData()
+          pushToast('Alumno eliminado')
+        } catch (error) {
+          pushToast(error.message, 'warn')
+        }
+      }}
+    >
+      Eliminar alumno
+    </button>
+  )}
+
+  <button
+    type="button"
+    className="btn btn-ghost"
+    onClick={() => setModalAlumno(null)}
+  >
+    Cancelar
+  </button>
+
+  <button type="submit" className="btn btn-blue">
+    Guardar ✓
+  </button>
+</div>
+
           </form>
         </div>
       )}
