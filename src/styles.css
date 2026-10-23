@@ -1413,3 +1413,95 @@ button:disabled {
   gap: 8px;
   margin-top: 20px;
 }
+
+@media (max-width: 720px) {
+  .content,
+  .main {
+    min-width: 0;
+    width: 100%;
+  }
+
+  .content {
+    padding: 12px;
+  }
+
+  .section-header {
+    align-items: stretch;
+  }
+
+  .section-header > .btn {
+    min-height: 42px;
+  }
+
+  .filters {
+    flex-direction: column;
+    align-items: stretch;
+    padding: 12px;
+  }
+
+  .filters > input,
+  .filters > select,
+  .filters > button {
+    width: 100%;
+    min-width: 0;
+    min-height: 42px;
+  }
+
+  .table-wrap {
+    max-width: 100%;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .table-wrap table {
+    min-width: 620px;
+  }
+
+  .modal-overlay {
+    align-items: flex-end;
+    padding: 10px;
+  }
+
+  .modal {
+    max-height: calc(100dvh - 20px);
+    padding: 20px 16px calc(16px + env(safe-area-inset-bottom));
+    border-radius: 18px 18px 12px 12px;
+  }
+
+  .modal-footer {
+    flex-wrap: wrap;
+  }
+
+  .modal-footer > button {
+    flex: 1 1 120px;
+    min-height: 44px;
+  }
+
+  .topbar,
+  .topbar-right {
+    min-width: 0;
+    flex-wrap: wrap;
+  }
+}
+
+@media (max-width: 480px) {
+  .content {
+    padding: 10px;
+  }
+
+  .filters > input,
+  .filters > select,
+  .field input,
+  .field select,
+  .field textarea {
+    font-size: 16px;
+  }
+
+  .action-row > button {
+    min-height: 40px;
+  }
+
+  .table-wrap table {
+    min-width: 580px;
+  }
+}

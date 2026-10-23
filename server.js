@@ -1267,6 +1267,49 @@ function registerPersonnelRoutes({
   dniColumn,
   includeCargo = false,
 }) {
+  function validatePersonnelData(values, expectedDni = null) {
+    const { dni, apellido, nombre, email, telefono, estado, cargo } = values;
+    const emailValue = email ?? "";
+    const telefonoValue = telefono ?? "";
+    const errors = [];
+
+    if (!/^\d{1,20}$/.test(String(dni || "")))
+      errors.push("DNI: ingresá entre 1 y 20 números.");
+    if (expectedDni != null && String(dni) !== expectedDni)
+      errors.push("DNI: no se puede cambiar desde este formulario.");
+    if (typeof apellido !== "string" || !apellido.trim())
+      errors.push("Apellido: es obligatorio.");
+    else if (apellido.trim().length > 80)
+      errors.push("Apellido: no puede superar los 80 caracteres.");
+    if (typeof nombre !== "string" || !nombre.trim())
+      errors.push("Nombre: es obligatorio.");
+    else if (nombre.trim().length > 80)
+      errors.push("Nombre: no puede superar los 80 caracteres.");
+    if (typeof emailValue !== "string")
+      errors.push("Email: ingresá texto válido.");
+    else if (emailValue.length > 150)
+      errors.push("Email: no puede superar los 150 caracteres.");
+    else if (
+      emailValue &&
+      !/^[^\s@]+@[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)*$/.test(emailValue)
+    )
+      errors.push("Email: usá un formato como usuario@dominio o usuario@dominio.com.");
+    if (typeof telefonoValue !== "string")
+      errors.push("Teléfono: ingresá texto válido.");
+    else if (telefonoValue.length > 30)
+      errors.push("Teléfono: no puede superar los 30 caracteres.");
+    if (!["Activo", "Baja"].includes(estado))
+      errors.push("Estado: seleccioná Activo o Baja.");
+    if (
+      includeCargo &&
+      cargo != null &&
+      !["Regente", "Subregente"].includes(cargo)
+    )
+      errors.push("Cargo: seleccioná Regente, Subregente o Sin cargo.");
+
+    return errors.length ? errors.join(" ") : null;
+  }
+
   app.get(`/api/${path}`, auth, roles("admin"), async (_req, res) => {
     try {
       const { rows } = await pool.query(`
@@ -1291,6 +1334,19 @@ function registerPersonnelRoutes({
       estado = "Activo",
       cargo = null,
     } = req.body || {};
+    const emailValue = email ?? "";
+    const telefonoValue = telefono ?? "";
+    const validationError = validatePersonnelData({
+      dni,
+      apellido,
+      nombre,
+      email,
+      telefono,
+      estado,
+      cargo,
+    });
+    if (validationError)
+      return res.status(400).json({ error: validationError });
     if (
       !/^\d{1,20}$/.test(String(dni || "")) ||
       typeof apellido !== "string" ||
@@ -1299,11 +1355,11 @@ function registerPersonnelRoutes({
       typeof nombre !== "string" ||
       !nombre.trim() ||
       nombre.trim().length > 80 ||
-      typeof email !== "string" ||
-      email.length > 150 ||
-      (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) ||
-      typeof telefono !== "string" ||
-      telefono.length > 30 ||
+      typeof emailValue !== "string" ||
+      emailValue.length > 150 ||
+      (emailValue && !/^[^\s@]+@[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)*$/.test(emailValue)) ||
+      typeof telefonoValue !== "string" ||
+      telefonoValue.length > 30 ||
       !["Activo", "Baja"].includes(estado) ||
       (includeCargo &&
         cargo != null &&
@@ -1325,8 +1381,8 @@ function registerPersonnelRoutes({
               dni,
               apellido.trim(),
               nombre.trim(),
-              email || null,
-              telefono || null,
+              emailValue || null,
+              telefonoValue || null,
               estado,
               cargo,
             ]
@@ -1334,8 +1390,8 @@ function registerPersonnelRoutes({
               dni,
               apellido.trim(),
               nombre.trim(),
-              email || null,
-              telefono || null,
+              emailValue || null,
+              telefonoValue || null,
               estado,
             ],
       );
@@ -1364,6 +1420,14 @@ function registerPersonnelRoutes({
       estado = "Activo",
       cargo = null,
     } = req.body || {};
+    const emailValue = email ?? "";
+    const telefonoValue = telefono ?? "";
+    const validationError = validatePersonnelData(
+      { dni: req.body?.dni, apellido, nombre, email, telefono, estado, cargo },
+      dni,
+    );
+    if (validationError)
+      return res.status(400).json({ error: validationError });
     if (
       String(req.body?.dni) !== dni ||
       typeof apellido !== "string" ||
@@ -1372,11 +1436,11 @@ function registerPersonnelRoutes({
       typeof nombre !== "string" ||
       !nombre.trim() ||
       nombre.trim().length > 80 ||
-      typeof email !== "string" ||
-      email.length > 150 ||
-      (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) ||
-      typeof telefono !== "string" ||
-      telefono.length > 30 ||
+      typeof emailValue !== "string" ||
+      emailValue.length > 150 ||
+      (emailValue && !/^[^\s@]+@[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)*$/.test(emailValue)) ||
+      typeof telefonoValue !== "string" ||
+      telefonoValue.length > 30 ||
       !["Activo", "Baja"].includes(estado) ||
       (includeCargo &&
         cargo != null &&
@@ -1401,8 +1465,8 @@ function registerPersonnelRoutes({
               dni,
               apellido.trim(),
               nombre.trim(),
-              email || null,
-              telefono || null,
+              emailValue || null,
+              telefonoValue || null,
               estado,
               cargo,
             ]
@@ -1410,8 +1474,8 @@ function registerPersonnelRoutes({
               dni,
               apellido.trim(),
               nombre.trim(),
-              email || null,
-              telefono || null,
+              emailValue || null,
+              telefonoValue || null,
               estado,
             ],
       );
