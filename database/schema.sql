@@ -386,11 +386,18 @@ CREATE TABLE IF NOT EXISTS curso (
   anio INTEGER NOT NULL CHECK (anio BETWEEN 1 AND 6),
   division VARCHAR(10) NOT NULL,
   id_ciclo_lectivo INTEGER NOT NULL REFERENCES ciclo_lectivo (id_ciclo_lectivo),
-  id_especialidad INTEGER NOT NULL REFERENCES especialidad (id_especialidad),
+  id_especialidad INTEGER REFERENCES especialidad (id_especialidad),
   UNIQUE (id_curso, id_ciclo_lectivo)
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_curso_anio_especialidad_ciclo ON curso (anio, id_especialidad, id_ciclo_lectivo);
+
+ALTER TABLE curso
+ALTER COLUMN id_especialidad DROP NOT NULL;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_curso_basico_anio_division_ciclo
+ON curso (anio, division, id_ciclo_lectivo)
+WHERE anio IN (1, 2) AND id_especialidad IS NULL;
 
 CREATE TABLE IF NOT EXISTS curso_turno (
   id_curso INTEGER PRIMARY KEY REFERENCES curso (id_curso) ON DELETE CASCADE,
@@ -794,6 +801,137 @@ CREATE TABLE IF NOT EXISTS nota_individual (
 ALTER TABLE nota_individual
 ADD COLUMN IF NOT EXISTS adeuda BOOLEAN;
 
+DO $$
+DECLARE
+  fk RECORD;
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM app_schema_migration
+    WHERE nombre='cursos_sin_especialidad_primero_segundo_v1'
+  ) THEN
+    RETURN;
+  END IF;
+
+  CREATE TEMP TABLE curso_basico_merge ON COMMIT DROP AS
+  SELECT id_curso,
+         MIN(id_curso) OVER (
+           PARTITION BY anio, division, id_ciclo_lectivo
+         ) AS id_curso_conservado
+  FROM curso
+  WHERE anio IN (1, 2);
+
+  FOR fk IN
+    SELECT conrelid::regclass AS tabla, conname
+    FROM pg_constraint
+    WHERE contype='f'
+      AND confrelid='alumno_curso'::regclass
+      AND conrelid IN ('nota'::regclass, 'nota_individual'::regclass)
+  LOOP
+    EXECUTE format('ALTER TABLE %s DROP CONSTRAINT %I', fk.tabla, fk.conname);
+  END LOOP;
+
+  UPDATE nota n
+  SET id_curso=m.id_curso_conservado
+  FROM curso_basico_merge m
+  WHERE n.id_curso=m.id_curso
+    AND m.id_curso<>m.id_curso_conservado;
+
+  UPDATE nota_individual ni
+  SET id_curso=m.id_curso_conservado
+  FROM curso_basico_merge m
+  WHERE ni.id_curso=m.id_curso
+    AND m.id_curso<>m.id_curso_conservado;
+
+  INSERT INTO curso_materia (id_curso, codigo_materia, id_ciclo_lectivo)
+  SELECT m.id_curso_conservado, cm.codigo_materia, cm.id_ciclo_lectivo
+  FROM curso_materia cm
+  JOIN curso_basico_merge m ON m.id_curso=cm.id_curso
+  ON CONFLICT DO NOTHING;
+
+  INSERT INTO profesor_curso_materia
+    (dni_profesor, id_curso, codigo_materia, id_ciclo_lectivo)
+  SELECT pcm.dni_profesor, m.id_curso_conservado,
+         pcm.codigo_materia, pcm.id_ciclo_lectivo
+  FROM profesor_curso_materia pcm
+  JOIN curso_basico_merge m ON m.id_curso=pcm.id_curso
+  ON CONFLICT DO NOTHING;
+
+  INSERT INTO curso_turno (id_curso, id_turno)
+  SELECT DISTINCT ON (m.id_curso_conservado)
+         m.id_curso_conservado, ct.id_turno
+  FROM curso_turno ct
+  JOIN curso_basico_merge m ON m.id_curso=ct.id_curso
+  WHERE m.id_curso<>m.id_curso_conservado
+    AND NOT EXISTS (
+      SELECT 1 FROM curso_turno existing
+      WHERE existing.id_curso=m.id_curso_conservado
+    )
+  ORDER BY m.id_curso_conservado, m.id_curso
+  ON CONFLICT (id_curso) DO NOTHING;
+
+  CREATE TEMP TABLE alumno_curso_basico_merge ON COMMIT DROP AS
+  SELECT ac.dni_alumno,
+         m.id_curso_conservado AS id_curso,
+         ac.id_ciclo_lectivo,
+         MIN(ac.fecha_inscripcion) AS fecha_inscripcion,
+         CASE WHEN BOOL_OR(ac.fecha_baja IS NULL)
+           THEN NULL ELSE MAX(ac.fecha_baja) END AS fecha_baja
+  FROM alumno_curso ac
+  JOIN curso_basico_merge m ON m.id_curso=ac.id_curso
+  GROUP BY ac.dni_alumno, m.id_curso_conservado, ac.id_ciclo_lectivo;
+
+  DELETE FROM profesor_curso_materia pcm
+  USING curso_basico_merge m
+  WHERE pcm.id_curso=m.id_curso
+    AND m.id_curso<>m.id_curso_conservado;
+
+  DELETE FROM curso_materia cm
+  USING curso_basico_merge m
+  WHERE cm.id_curso=m.id_curso
+    AND m.id_curso<>m.id_curso_conservado;
+
+  DELETE FROM alumno_curso ac
+  USING curso_basico_merge m
+  WHERE ac.id_curso=m.id_curso;
+
+  INSERT INTO alumno_curso
+    (dni_alumno, id_curso, id_ciclo_lectivo, fecha_inscripcion, fecha_baja)
+  SELECT dni_alumno, id_curso, id_ciclo_lectivo, fecha_inscripcion, fecha_baja
+  FROM alumno_curso_basico_merge;
+
+  DELETE FROM curso c
+  USING curso_basico_merge m
+  WHERE c.id_curso=m.id_curso
+    AND m.id_curso<>m.id_curso_conservado;
+
+  UPDATE curso
+  SET id_especialidad=NULL
+  WHERE anio IN (1, 2);
+
+  ALTER TABLE nota
+    ADD CONSTRAINT nota_alumno_curso_ciclo_fkey
+    FOREIGN KEY (dni_alumno, id_curso, id_ciclo_lectivo)
+    REFERENCES alumno_curso(dni_alumno, id_curso, id_ciclo_lectivo);
+
+  ALTER TABLE nota_individual
+    ADD CONSTRAINT nota_individual_alumno_curso_ciclo_fkey
+    FOREIGN KEY (dni_alumno, id_curso, id_ciclo_lectivo)
+    REFERENCES alumno_curso(dni_alumno, id_curso, id_ciclo_lectivo)
+    ON DELETE CASCADE;
+
+  INSERT INTO app_schema_migration (nombre)
+  VALUES ('cursos_sin_especialidad_primero_segundo_v1');
+END $$;
+
+ALTER TABLE curso
+DROP CONSTRAINT IF EXISTS curso_especialidad_por_anio_check;
+
+ALTER TABLE curso
+ADD CONSTRAINT curso_especialidad_por_anio_check CHECK (
+  (anio IN (1, 2) AND id_especialidad IS NULL)
+  OR (anio BETWEEN 3 AND 6 AND id_especialidad IS NOT NULL)
+);
+
 CREATE INDEX IF NOT EXISTS idx_nota_individual_contexto ON nota_individual (
   dni_alumno,
   codigo_materia,
@@ -943,11 +1081,12 @@ SELECT
 FROM
   generate_series(1, 6) AS years (anio)
   CROSS JOIN ciclo_lectivo cl
-  CROSS JOIN especialidad e
+  LEFT JOIN especialidad e
+    ON years.anio >= 3
+    AND e.nombre IN ('Automotores', 'Computación')
 WHERE
   cl.anio = 2026
-  AND e.nombre IN ('Automotores', 'Computación')
-ON CONFLICT (anio, id_especialidad, id_ciclo_lectivo) DO NOTHING;
+ON CONFLICT DO NOTHING;
 
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 

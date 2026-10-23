@@ -121,7 +121,7 @@ function App() {
   const [nuevoCicloCopiarDesde, setNuevoCicloCopiarDesde] = useState("");
   const [cursoForm, setCursoForm] = useState({
     anio: "1",
-    especialidad: "Automotores",
+    especialidad: "",
     turno_id: "",
     materias: [],
   });
@@ -567,7 +567,7 @@ function App() {
   function openNewCurso() {
     setCursoForm({
       anio: "1",
-      especialidad: "Automotores",
+      especialidad: "",
       turno_id: "",
       materias: [],
     });
@@ -588,7 +588,7 @@ function App() {
     event.preventDefault();
     const body = {
       anio: Number(cursoForm.anio),
-      especialidad: cursoForm.especialidad,
+      especialidad: Number(cursoForm.anio) <= 2 ? null : cursoForm.especialidad,
       turno_id: cursoForm.turno_id || null,
       materias: cursoForm.materias,
     };
@@ -613,7 +613,7 @@ function App() {
   async function deleteCurso(curso) {
     if (
       !window.confirm(
-        `¿Eliminar ${curso.anio}° ${curso.division}° ${curso.especialidad}? No se puede deshacer. Los cursos con alumnos o notas asociadas no se pueden eliminar.`,
+        `¿Eliminar ${curso.anio}° ${curso.division}°${curso.especialidad ? ` — ${curso.especialidad}` : ""}? No se puede deshacer. Los cursos con alumnos o notas asociadas no se pueden eliminar.`,
       )
     )
       return;
@@ -1411,8 +1411,8 @@ function App() {
                 <option value="">Sin curso</option>
                 {cursos.map((curso) => (
                   <option key={curso.id_curso} value={curso.id_curso}>
-                    {curso.anio}° {curso.division} —{" "}
-                    {curso.especialidad || "Sin especialidad"}
+                    {curso.anio}° {curso.division}°
+                    {curso.especialidad && ` — ${curso.especialidad}`}
                   </option>
                 ))}
               </select>
@@ -1690,8 +1690,8 @@ function App() {
                             }
                           />
                           <span>
-                            {curso.anio}° {curso.division} —{" "}
-                            {curso.especialidad}
+                            {curso.anio}° {curso.division}
+                            {curso.especialidad && ` — ${curso.especialidad}`}
                           </span>
                         </label>
                       );
@@ -1755,9 +1755,17 @@ function App() {
               <select
                 id="course-year"
                 value={cursoForm.anio}
-                onChange={(event) =>
-                  setCursoForm({ ...cursoForm, anio: event.target.value })
-                }
+                onChange={(event) => {
+                  const anio = event.target.value;
+                  setCursoForm((current) => ({
+                    ...current,
+                    anio,
+                    especialidad:
+                      Number(anio) <= 2
+                        ? ""
+                        : current.especialidad || "Automotores",
+                  }));
+                }}
               >
                 {[1, 2, 3, 4, 5, 6].map((anio) => (
                   <option key={anio} value={anio}>
@@ -1766,22 +1774,24 @@ function App() {
                 ))}
               </select>
             </div>
-            <div className="field">
-              <label htmlFor="course-specialty">Especialidad</label>
-              <select
-                id="course-specialty"
-                value={cursoForm.especialidad}
-                onChange={(event) =>
-                  setCursoForm({
-                    ...cursoForm,
-                    especialidad: event.target.value,
-                  })
-                }
-              >
-                <option value="Automotores">Automotores</option>
-                <option value="Computación">Computación</option>
-              </select>
-            </div>
+            {Number(cursoForm.anio) >= 3 && (
+              <div className="field">
+                <label htmlFor="course-specialty">Especialidad</label>
+                <select
+                  id="course-specialty"
+                  value={cursoForm.especialidad}
+                  onChange={(event) =>
+                    setCursoForm({
+                      ...cursoForm,
+                      especialidad: event.target.value,
+                    })
+                  }
+                >
+                  <option value="Automotores">Automotores</option>
+                  <option value="Computación">Computación</option>
+                </select>
+              </div>
+            )}
             <div className="field">
               <label htmlFor="course-shift">Turno</label>
               <select
@@ -2478,8 +2488,8 @@ function AlumnosPage({
             <option value="">Todos los cursos</option>
             {cursos.map((curso) => (
               <option key={curso.id_curso} value={curso.id_curso}>
-                {curso.anio}° {curso.division}° —{" "}
-                {curso.especialidad || "Sin especialidad"}
+                {curso.anio}° {curso.division}°
+                {curso.especialidad && ` — ${curso.especialidad}`}
               </option>
             ))}
           </select>
@@ -2697,8 +2707,8 @@ function DocentesPage({
             <option value="">Todos los cursos</option>
             {cursos.map((curso) => (
               <option key={curso.id_curso} value={curso.id_curso}>
-                {curso.anio}° {curso.division}° —{" "}
-                {curso.especialidad || "Sin especialidad"}
+                {curso.anio}° {curso.division}°
+                {curso.especialidad && ` — ${curso.especialidad}`}
               </option>
             ))}
           </select>
@@ -2983,7 +2993,7 @@ function CursosPage({
       <div className="my-notas-grid">
         {cursos.map((curso) => {
           const isSelected = selectedCourseId === curso.id_curso;
-          const label = `${curso.anio}° ${curso.division}° ${curso.especialidad || "Especialidad no especificada"}`;
+          const label = `${curso.anio}° ${curso.division}°${curso.especialidad ? ` — ${curso.especialidad}` : ""}`;
           return (
             <article
               key={curso.id_curso}
@@ -3058,8 +3068,8 @@ function CursosPage({
         <div className="course-students">
           <div className="section-header">
             <div className="section-title">
-              Alumnos de {selectedCourse.anio}° {selectedCourse.division}°{" "}
-              {selectedCourse.especialidad}
+              Alumnos de {selectedCourse.anio}° {selectedCourse.division}°
+              {selectedCourse.especialidad && ` — ${selectedCourse.especialidad}`}
             </div>
             <span className="badge badge-blue">
               {courseAlumnos.length} alumnos
@@ -3574,8 +3584,8 @@ function NotasPage({
             <option value="">Seleccionar curso…</option>
             {cursos.map((curso) => (
               <option key={curso.id_curso} value={curso.id_curso}>
-                {curso.anio}° {curso.division} —{" "}
-                {curso.especialidad || "Sin especialidad"}
+                {curso.anio}° {curso.division}°
+                {curso.especialidad && ` — ${curso.especialidad}`}
               </option>
             ))}
           </select>
@@ -3793,8 +3803,8 @@ function ConsultaPage({ isAlumno, boletines, alumnos, cursos, pushToast }) {
             <option value="">Todos los cursos</option>
             {cursos.map((curso) => (
               <option key={curso.id_curso} value={curso.id_curso}>
-                {curso.anio}° {curso.division}° —{" "}
-                {curso.especialidad || "Sin especialidad"}
+                {curso.anio}° {curso.division}°
+                {curso.especialidad && ` — ${curso.especialidad}`}
               </option>
             ))}
           </select>
@@ -3942,7 +3952,8 @@ function BulletinHistory({ bulletin, showStudentName = true }) {
           {cycle.cursos?.map((curso) => (
             <div className="bulletin-course" key={curso.id_curso}>
               <h4>
-                {curso.anio}° {curso.division}° — {curso.especialidad}
+                {curso.anio}° {curso.division}°
+                {curso.especialidad && ` — ${curso.especialidad}`}
               </h4>
               <div className="table-wrap">
                 <table className="bulletin-table">

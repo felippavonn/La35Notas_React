@@ -408,7 +408,7 @@ async function getStudentBulletins(dni) {
     JOIN ciclo_lectivo cl ON cl.id_ciclo_lectivo=ac.id_ciclo_lectivo
     JOIN curso c ON c.id_curso=ac.id_curso
       AND c.id_ciclo_lectivo=ac.id_ciclo_lectivo
-    JOIN especialidad e ON e.id_especialidad=c.id_especialidad
+    LEFT JOIN especialidad e ON e.id_especialidad=c.id_especialidad
     LEFT JOIN LATERAL (
       SELECT codigo_materia
       FROM curso_materia
@@ -884,7 +884,18 @@ app.get("/api/docentes", auth, async (req, res) => {
                WHERE pm.dni_profesor=p.dni
                  AND pm.id_ciclo_lectivo=(SELECT id_ciclo_lectivo FROM ciclo_lectivo WHERE anio=COALESCE($1::integer, (SELECT MAX(anio) FROM ciclo_lectivo)) ORDER BY anio DESC LIMIT 1)
              ), '') AS materias,
-             COALESCE(string_agg(DISTINCT c.anio || '° ' || c.division || ' — ' || e.nombre, ', '), '') AS cursos,
+             COALESCE(
+               string_agg(
+                 DISTINCT CONCAT(
+                   c.anio,
+                   '° ',
+                   c.division,
+                   CASE WHEN e.nombre IS NULL THEN '' ELSE ' — ' || e.nombre END
+                 ),
+                 ', '
+               ),
+               ''
+             ) AS cursos,
              COALESCE((
                SELECT json_agg(json_build_object(
                  'codigo_materia', por_materia.codigo_materia,
@@ -895,7 +906,12 @@ app.get("/api/docentes", auth, async (req, res) => {
                  SELECT pm.codigo_materia, materia.nombre,
                         COALESCE(json_agg(json_build_object(
                           'id_curso', c2.id_curso,
-                          'label', c2.anio || '° ' || c2.division || ' — ' || e2.nombre
+                          'label', CONCAT(
+                            c2.anio,
+                            '° ',
+                            c2.division,
+                            CASE WHEN e2.nombre IS NULL THEN '' ELSE ' — ' || e2.nombre END
+                          )
                         ) ORDER BY c2.anio, c2.division, e2.nombre)
                           FILTER (WHERE c2.id_curso IS NOT NULL), '[]'::json) AS cursos
                  FROM profesor_materia pm
@@ -1474,7 +1490,7 @@ app.get("/api/cursos", auth, async (req, res) => {
                '[]'::jsonb
              ) AS materias
       FROM curso c
-      JOIN especialidad e ON e.id_especialidad=c.id_especialidad
+      LEFT JOIN especialidad e ON e.id_especialidad=c.id_especialidad
       JOIN ciclo_lectivo cl ON cl.id_ciclo_lectivo=c.id_ciclo_lectivo
       LEFT JOIN alumno_curso ac ON ac.id_curso=c.id_curso
         AND ac.id_ciclo_lectivo=c.id_ciclo_lectivo
@@ -1530,7 +1546,7 @@ app.get(
 
 app.post("/api/cursos", auth, roles("admin"), async (req, res) => {
   const anio = Number(req.body.anio);
-  const { especialidad } = req.body;
+  const especialidad = anio <= 2 ? null : req.body.especialidad;
   const turnoId =
     req.body.turno_id == null || req.body.turno_id === ""
       ? null
@@ -1538,9 +1554,6 @@ app.post("/api/cursos", auth, roles("admin"), async (req, res) => {
 
   if (!Number.isInteger(anio) || anio < 1 || anio > 6) {
     return fail(res, 400, "El año debe estar entre 1 y 6");
-  }
-  if (!["Automotores", "Computación"].includes(especialidad)) {
-    return fail(res, 400, "La especialidad no es válida");
   }
   if (turnoId !== null && !Number.isInteger(turnoId)) {
     return fail(res, 400, "El turno no es válido");
@@ -1553,6 +1566,9 @@ app.post("/api/cursos", auth, roles("admin"), async (req, res) => {
       "SELECT id_especialidad FROM especialidad WHERE nombre=$1",
       [especialidad],
     );
+    if (anio >= 3 && !specialtyResult.rows[0])
+      throw new Error("La especialidad no es válida");
+    const idEspecialidad = specialtyResult.rows[0]?.id_especialidad || null;
     const cycleId = await getCycleId(client, requestedCycleYear(req));
     if (!cycleId) {
       await client.query("ROLLBACK");
@@ -1565,7 +1581,7 @@ app.post("/api/cursos", auth, roles("admin"), async (req, res) => {
       VALUES ($1,'1',$2,$3)
       RETURNING *
     `,
-      [anio, cycleId, specialtyResult.rows[0]?.id_especialidad],
+      [anio, cycleId, idEspecialidad],
     );
 
     if (turnoId !== null) {
@@ -1609,7 +1625,7 @@ app.post("/api/cursos", auth, roles("admin"), async (req, res) => {
 app.put("/api/cursos/:id", auth, roles("admin"), async (req, res) => {
   const idCurso = Number(req.params.id);
   const anio = Number(req.body.anio);
-  const { especialidad } = req.body;
+  const especialidad = anio <= 2 ? null : req.body.especialidad;
   const turnoId =
     req.body.turno_id == null || req.body.turno_id === ""
       ? null
@@ -1623,9 +1639,6 @@ app.put("/api/cursos/:id", auth, roles("admin"), async (req, res) => {
   ) {
     return fail(res, 400, "El curso o el año no son válidos");
   }
-  if (!["Automotores", "Computación"].includes(especialidad)) {
-    return fail(res, 400, "La especialidad no es válida");
-  }
   if (turnoId !== null && !Number.isInteger(turnoId)) {
     return fail(res, 400, "El turno no es válido");
   }
@@ -1637,6 +1650,9 @@ app.put("/api/cursos/:id", auth, roles("admin"), async (req, res) => {
       "SELECT id_especialidad FROM especialidad WHERE nombre=$1",
       [especialidad],
     );
+    if (anio >= 3 && !specialtyResult.rows[0])
+      throw new Error("La especialidad no es válida");
+    const idEspecialidad = specialtyResult.rows[0]?.id_especialidad || null;
     const cycleId = await getCycleId(client, requestedCycleYear(req));
     if (!cycleId) {
       await client.query("ROLLBACK");
@@ -1650,7 +1666,7 @@ app.put("/api/cursos/:id", auth, roles("admin"), async (req, res) => {
       WHERE id_curso=$1 AND id_ciclo_lectivo=$4
       RETURNING *
     `,
-      [idCurso, anio, specialtyResult.rows[0]?.id_especialidad, cycleId],
+      [idCurso, anio, idEspecialidad, cycleId],
     );
     if (!rows[0]) {
       await client.query("ROLLBACK");
@@ -2113,7 +2129,12 @@ app.get("/api/materias", auth, async (req, res) => {
                  ) ORDER BY p.apellido, p.nombre)
                  FROM (
                    SELECT pm.dni_profesor,
-                          COALESCE(array_agg(DISTINCT c.anio || '° ' || c.division || ' — ' || e.nombre)
+                          COALESCE(array_agg(DISTINCT CONCAT(
+                            c.anio,
+                            '° ',
+                            c.division,
+                            CASE WHEN e.nombre IS NULL THEN '' ELSE ' — ' || e.nombre END
+                          ))
                             FILTER (WHERE c.id_curso IS NOT NULL), ARRAY[]::text[]) AS cursos
                    FROM profesor_materia pm
                    LEFT JOIN profesor_curso_materia pcm ON pcm.dni_profesor=pm.dni_profesor
