@@ -47,7 +47,7 @@ node scripts/init-db.cjs
 
 ## Despliegue Cloudflare + Render
 
-- En Render, crea un servicio web con `npm install && npm run build` como comando de compilación y `npm run server` como comando de inicio. Configura `DATABASE_URL`, `DATABASE_SSL=true` si PostgreSQL requiere SSL, y `CORS_ORIGIN` con el dominio de Cloudflare Pages y cualquier dominio personalizado.
+- En Render, crea un servicio web con `npm install --include=dev && node scripts/init-db.cjs && npm run build` como comando de compilación y `npm run server` como comando de inicio. `--include=dev` instala Vite para compilar la interfaz. Configura `DATABASE_URL`, `DATABASE_SSL=true` si PostgreSQL requiere SSL, y `CORS_ORIGIN` con el dominio de Cloudflare Pages y cualquier dominio personalizado.
 - En Cloudflare Pages, usa `npm run build` como comando de compilación y `dist` como directorio de salida. Define `VITE_API_URL` como la URL pública de la API de Render terminada en `/api` y `VITE_DEMO_MODE=false`.
 - Los turnos Mañana, Tarde y Noche son datos oficiales: el backend los sirve desde `/api/turnos` y los inicializa en la base de datos; el modo demo usa una copia local y no realiza llamadas al servidor. No se guardan horas de entrada, salida, prehora ni poshora.
 

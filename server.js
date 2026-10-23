@@ -635,7 +635,7 @@ app.put(
               AND fecha_baja IS NULL
               AND id_curso<>$3
           `,
-              [dni, cursoAsignado, currentCycleId],
+              [dni, currentCycleId, cursoAsignado],
             );
             await client.query(
               `
