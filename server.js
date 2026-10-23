@@ -1441,6 +1441,8 @@ function registerPersonnelRoutes({
 
   app.delete(`/api/${path}/:dni`, auth, roles("admin"), async (req, res) => {
     const { dni } = req.params;
+    if (role === "admin" && String(req.user.dni_administrador) === dni)
+      return fail(res, 409, "No podés eliminar tu propia cuenta de administrador");
     const client = await pool.connect();
     let deletedUserId;
     try {

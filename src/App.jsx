@@ -1309,6 +1309,7 @@ function App() {
               key="preceptores"
               resource="preceptores"
               title="Preceptores"
+              currentAdminDni={session?.dni_administrador}
               pushToast={pushToast}
             />
           )}
@@ -1318,6 +1319,7 @@ function App() {
               resource="administradores"
               title="Administradores"
               includeCargo
+              currentAdminDni={session?.dni_administrador}
               pushToast={pushToast}
             />
           )}
@@ -3199,6 +3201,7 @@ function PersonalAdminPage({
   resource,
   title,
   includeCargo = false,
+  currentAdminDni,
   pushToast,
 }) {
   const singular = resource === "preceptores" ? "preceptor" : "administrador";
@@ -3301,6 +3304,13 @@ function PersonalAdminPage({
 
   async function remove(person) {
     if (
+      resource === "administradores" &&
+      String(person.dni) === String(currentAdminDni)
+    ) {
+      pushToast("No podés eliminar tu propia cuenta de administrador", "warn");
+      return;
+    }
+    if (
       !window.confirm(
         `¿Eliminar a ${person.apellido}, ${person.nombre}? Esta acción también elimina su cuenta de acceso y no se puede deshacer.`,
       )
@@ -3388,13 +3398,6 @@ function PersonalAdminPage({
                             onClick={() => openEdit(person)}
                           >
                             Editar
-                          </button>
-                          <button
-                            type="button"
-                            className="btn btn-danger btn-sm"
-                            onClick={() => remove(person)}
-                          >
-                            Eliminar
                           </button>
                         </div>
                       </td>
@@ -3523,8 +3526,10 @@ function PersonalAdminPage({
             )}
             {modal.mode === "edit" && (
               <div className="course-delete-warning" role="note">
-                Eliminar también borra la cuenta de acceso asociada. Se
-                solicitará confirmación antes de hacerlo.
+                {resource === "administradores" &&
+                String(modal.person.dni) === String(currentAdminDni)
+                  ? "No podés eliminar tu propia cuenta de administrador."
+                  : "Eliminar también borra la cuenta de acceso asociada. Se solicitará confirmación antes de hacerlo."}
               </div>
             )}
             <div className="modal-footer">
@@ -3533,6 +3538,10 @@ function PersonalAdminPage({
                   type="button"
                   className="btn btn-danger"
                   onClick={() => remove(modal.person)}
+                  disabled={
+                    resource === "administradores" &&
+                    String(modal.person.dni) === String(currentAdminDni)
+                  }
                 >
                   Eliminar
                 </button>
