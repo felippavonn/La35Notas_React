@@ -2,16 +2,17 @@ import { jsPDF } from "jspdf";
 import autoTable from "jspdf-autotable";
 
 const periods = [
-  ["BIMESTRE_1", "1.º bimestre"],
-  ["BIMESTRE_2", "2.º bimestre"],
-  ["CUATRIMESTRE_1", "1.er cuatrimestre"],
-  ["BIMESTRE_3", "3.º bimestre"],
-  ["BIMESTRE_4", "4.º bimestre"],
-  ["CUATRIMESTRE_2", "2.º cuatrimestre"],
-  ["FINAL", "Final"],
-  ["DICIEMBRE", "Diciembre"],
-  ["FEBRERO", "Febrero"],
+  ["BIMESTRE_1", "1\u00ba Bimestre"],
+  ["BIMESTRE_2", "2\u00ba Bimestre"],
+  ["CUATRIMESTRE_1", "1\u00ba Cuatrimestre"],
+  ["BIMESTRE_3", "3\u00ba Bimestre"],
+  ["BIMESTRE_4", "4\u00ba Bimestre"],
+  ["CUATRIMESTRE_2", "2\u00ba Cuatrimestre"],
+  ["FINAL", "1\u00ba Cierre"],
+  ["DICIEMBRE", "2\u00ba Cierre"],
+  ["FEBRERO", "3\u00ba Cierre"],
 ];
+const closurePeriods = ["FEBRERO", "DICIEMBRE", "FINAL"];
 
 function displayGrade(value) {
   return value == null || value === "" ? "" : String(Number(value));
@@ -22,6 +23,16 @@ function gradeForPeriod(subject, period) {
     subject.notas?.find((grade) => grade.tipo_evaluacion === period)
       ?.calificacion,
   );
+}
+
+function definitiveGrade(subject) {
+  for (const period of closurePeriods) {
+    const grade = subject.notas?.find(
+      (note) => note.tipo_evaluacion === period,
+    )?.calificacion;
+    if (grade != null && grade !== "") return displayGrade(grade);
+  }
+  return "";
 }
 
 export function createBulletinPdfDocument(student, cycle) {
@@ -83,12 +94,12 @@ export function createBulletinPdfDocument(student, cycle) {
   const gradeHeaders = [
     "Asignatura",
     ...periods.map(([, label]) => label),
-    "Calificación definitiva",
+    "Calif. Def.",
   ];
   const gradeRows = subjects.map((subject) => [
     subject.nombre,
     ...periods.map(([period]) => gradeForPeriod(subject, period)),
-    "",
+    definitiveGrade(subject),
   ]);
 
   const gradesStartY = pdf.lastAutoTable.finalY + 3;
