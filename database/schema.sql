@@ -891,7 +891,7 @@ SET
 INSERT INTO
   curso (anio, division, id_ciclo_lectivo, id_especialidad)
 SELECT
-  anio,
+  years.anio,
   '1',
   cl.id_ciclo_lectivo,
   e.id_especialidad
