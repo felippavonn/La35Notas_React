@@ -373,7 +373,7 @@ app.get("/api/alumnos", auth, async (req, res) => {
   }
 });
 
-async function getStudentBulletins(dni) {
+async function getStudentBulletins(dni, cycleYear = null) {
   const { rows } = await pool.query(
     `
     WITH current_enrollment AS (
@@ -385,9 +385,13 @@ async function getStudentBulletins(dni) {
                ac.fecha_inscripcion DESC,
                ac.id_curso DESC
     )
-    SELECT a.dni, a.nombre, a.apellido, ac.id_curso,
+    SELECT a.dni, a.nombre, a.apellido, a.fecha_nacimiento,
+           a.genero, a.nacionalidad,
+           d.calle, d.numero_calle, d.departamento, d.localidad,
+           ac.id_curso,
            cl.anio AS ciclo_lectivo, c.anio AS anio_curso, c.division,
-           e.nombre AS especialidad, subjects.codigo_materia,
+           e.nombre AS especialidad, t.jornada AS turno,
+           subjects.codigo_materia,
            cm.nombre AS materia,
            COALESCE((
              SELECT jsonb_agg(jsonb_build_object(
@@ -402,13 +406,32 @@ async function getStudentBulletins(dni) {
                AND n.id_curso=ac.id_curso
                AND n.id_ciclo_lectivo=ac.id_ciclo_lectivo
                AND n.codigo_materia=subjects.codigo_materia
-           ), '[]'::jsonb) AS notas
+           ), '[]'::jsonb) AS notas,
+           COALESCE((
+             SELECT jsonb_agg(jsonb_build_object(
+               'id', ni.id_nota_individual,
+               'tipo_evaluacion', ni.tipo_evaluacion,
+               'tema', ni.tema,
+               'estado', ni.estado,
+               'calificacion', ni.calificacion,
+               'adeuda', ni.adeuda,
+               'fecha', ni.fecha
+             ) ORDER BY ni.fecha, ni.id_nota_individual)
+             FROM nota_individual ni
+             WHERE ni.dni_alumno=ac.dni_alumno
+               AND ni.id_curso=ac.id_curso
+               AND ni.id_ciclo_lectivo=ac.id_ciclo_lectivo
+               AND ni.codigo_materia=subjects.codigo_materia
+           ), '[]'::jsonb) AS evaluaciones
     FROM current_enrollment ac
     JOIN alumno a ON a.dni=ac.dni_alumno
+    LEFT JOIN domicilio d ON d.id_domicilio=a.id_domicilio
     JOIN ciclo_lectivo cl ON cl.id_ciclo_lectivo=ac.id_ciclo_lectivo
     JOIN curso c ON c.id_curso=ac.id_curso
       AND c.id_ciclo_lectivo=ac.id_ciclo_lectivo
     LEFT JOIN especialidad e ON e.id_especialidad=c.id_especialidad
+    LEFT JOIN curso_turno ct ON ct.id_curso=c.id_curso
+    LEFT JOIN turno t ON t.id_turno=ct.id_turno
     LEFT JOIN LATERAL (
       SELECT codigo_materia
       FROM curso_materia
@@ -421,9 +444,10 @@ async function getStudentBulletins(dni) {
     ) subjects ON TRUE
     LEFT JOIN materia cm ON cm.codigo=subjects.codigo_materia
     WHERE ac.dni_alumno=$1
+      AND ($2::integer IS NULL OR cl.anio=$2)
     ORDER BY cl.anio DESC, c.anio, c.division, cm.nombre
   `,
-    [dni],
+    [dni, cycleYear],
   );
 
   const cycles = new Map();
@@ -443,6 +467,7 @@ async function getStudentBulletins(dni) {
         anio: row.anio_curso,
         division: row.division,
         especialidad: row.especialidad,
+        turno: row.turno,
         materias: [],
         _subjects: new Map(),
       };
@@ -454,6 +479,7 @@ async function getStudentBulletins(dni) {
       codigo: row.codigo_materia,
       nombre: row.materia || row.codigo_materia,
       notas: row.notas || [],
+      evaluaciones: row.evaluaciones || [],
     };
     course._subjects.set(subject.codigo, subject);
   }
@@ -485,6 +511,17 @@ async function getStudentBulletins(dni) {
     dni,
     nombre: student?.nombre || "",
     apellido: student?.apellido || "",
+    fecha_nacimiento: student?.fecha_nacimiento || null,
+    genero: student?.genero || null,
+    nacionalidad: student?.nacionalidad || null,
+    domicilio: [
+      student?.calle,
+      student?.numero_calle,
+      student?.departamento,
+      student?.localidad,
+    ]
+      .filter(Boolean)
+      .join(", "),
     promedio_general: allGrades.length
       ? allGrades.reduce((sum, grade) => sum + Number(grade.calificacion), 0) /
         allGrades.length
@@ -501,7 +538,7 @@ app.get(
     const dni = String(req.params.dni || "");
     if (!/^\d{1,20}$/.test(dni)) return fail(res, 400, "El DNI no es válido");
     try {
-      const bulletin = await getStudentBulletins(dni);
+      const bulletin = await getStudentBulletins(dni, requestedCycleYear(req));
       if (!bulletin.nombre) return fail(res, 404, "No se encontró el alumno");
       res.json(bulletin);
     } catch (error) {

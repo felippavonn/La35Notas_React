@@ -400,7 +400,6 @@ function App() {
     setModalDocente(null);
     setModalCurso(null);
     setModalMateria(null);
-    setModalTurno(null);
     setModalNota(null);
     setModalNotaIndividual(null);
   }
@@ -3881,7 +3880,11 @@ function ConsultaPage({ isAlumno, boletines, alumnos, cursos, pushToast }) {
         <div className="section-header">
           <div className="section-title">Mis boletines</div>
         </div>
-        <BulletinHistory bulletin={boletines} showStudentName={false} />
+        <BulletinHistory
+          bulletin={boletines}
+          showStudentName={false}
+          onPdfError={(error) => pushToast(error.message, "warn")}
+        />
       </>
     );
   }
@@ -4002,7 +4005,10 @@ function ConsultaPage({ isAlumno, boletines, alumnos, cursos, pushToast }) {
       {selectedDni && (
         <section className="bulletin-detail">
           {selectedBulletin ? (
-            <BulletinHistory bulletin={selectedBulletin} />
+            <BulletinHistory
+              bulletin={selectedBulletin}
+              onPdfError={(error) => pushToast(error.message, "warn")}
+            />
           ) : (
             <div className="card empty-state">Cargando boletines…</div>
           )}
@@ -4016,7 +4022,7 @@ function formatAverage(value) {
   return value == null || value === "" ? "—" : Number(value).toFixed(2);
 }
 
-function BulletinHistory({ bulletin, showStudentName = true }) {
+function BulletinHistory({ bulletin, showStudentName = true, onPdfError }) {
   const cycles = bulletin?.ciclos || [];
   if (!cycles.length)
     return (
@@ -4048,6 +4054,23 @@ function BulletinHistory({ bulletin, showStudentName = true }) {
         >
           <div className="bulletin-cycle-heading">
             <h3>Ciclo lectivo {cycle.anio}</h3>
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm bulletin-pdf-button"
+              onClick={() => {
+                const pdfWindow = window.open("about:blank", "_blank");
+                import("./utils/bulletinPdf")
+                  .then(({ openBulletinPdf }) =>
+                    openBulletinPdf(bulletin, cycle, pdfWindow),
+                  )
+                  .catch((error) => {
+                    pdfWindow?.close();
+                    onPdfError?.(error);
+                  });
+              }}
+            >
+              Ver en PDF
+            </button>
             <span className="badge badge-blue">
               Promedio del año: {formatAverage(cycle.promedio)}
             </span>
