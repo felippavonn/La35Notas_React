@@ -85,7 +85,7 @@ function App() {
 
   const [search, setSearch] = useState("");
   const [filterCurso, setFilterCurso] = useState("");
-  const [filterEstado, setFilterEstado] = useState("");
+  const [filterEstado, setFilterEstado] = useState("Activo");
   const [notaCurso, setNotaCurso] = useState("");
   const [notaMateria, setNotaMateria] = useState("");
 
@@ -1589,7 +1589,7 @@ function App() {
                   })
                 }
               >
-                {["Activo", "Licencia", "Suplente", "Baja"].map((estado) => (
+                {["Activo", "Baja"].map((estado) => (
                   <option key={estado}>{estado}</option>
                 ))}
               </select>
@@ -2583,7 +2583,7 @@ function DocentesPage({
   const [search, setSearch] = useState("");
   const [filterMateria, setFilterMateria] = useState("");
   const [filterCurso, setFilterCurso] = useState("");
-  const [filterEstado, setFilterEstado] = useState("");
+  const [filterEstado, setFilterEstado] = useState("Activo");
   const [currentPage, setCurrentPage] = useState(1);
   const pageSize = 50;
 
@@ -2710,7 +2710,7 @@ function DocentesPage({
             }}
           >
             <option value="">Todos los estados</option>
-            {["Activo", "Licencia", "Suplente", "Baja"].map((estado) => (
+            {["Activo", "Baja"].map((estado) => (
               <option key={estado} value={estado}>
                 {estado}
               </option>
@@ -3124,8 +3124,13 @@ function PersonalAdminPage({
     email: "",
     telefono: "",
     cargo: "",
+    estado: "Activo",
   });
+  const [filterEstado, setFilterEstado] = useState("Activo");
   const [loading, setLoading] = useState(true);
+  const filteredRecords = records.filter(
+    (person) => !filterEstado || person.estado === filterEstado,
+  );
 
   async function loadRecords() {
     setLoading(true);
@@ -3151,6 +3156,7 @@ function PersonalAdminPage({
       email: "",
       telefono: "",
       cargo: "",
+      estado: "Activo",
     });
     setModal({ mode: "new" });
   }
@@ -3163,6 +3169,7 @@ function PersonalAdminPage({
       email: person.email || "",
       telefono: person.telefono || "",
       cargo: person.cargo || "",
+      estado: person.estado || "Activo",
     });
     setModal({ mode: "edit", person });
   }
@@ -3225,63 +3232,83 @@ function PersonalAdminPage({
         {loading ? (
           <div className="loading-line">Cargando…</div>
         ) : (
-          <div className="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>DNI</th>
-                  <th>Apellido(s) y nombre(s)</th>
-                  <th>Email</th>
-                  <th>Teléfono</th>
-                  {includeCargo && <th>Cargo</th>}
-                  <th>Acciones</th>
-                </tr>
-              </thead>
-              <tbody>
-                {records.map((person) => (
-                  <tr key={person.dni}>
-                    <td>{person.dni}</td>
-                    <td>
-                      <strong>
-                        {person.apellido?.toLocaleUpperCase("es-AR")},{" "}
-                        {person.nombre}
-                      </strong>
-                    </td>
-                    <td>{person.email || "—"}</td>
-                    <td>{person.telefono || "—"}</td>
-                    {includeCargo && <td>{person.cargo || "—"}</td>}
-                    <td>
-                      <div className="action-row">
-                        <button
-                          type="button"
-                          className="btn btn-ghost btn-sm"
-                          onClick={() => openEdit(person)}
-                        >
-                          Editar
-                        </button>
-                        <button
-                          type="button"
-                          className="btn btn-danger btn-sm"
-                          onClick={() => remove(person)}
-                        >
-                          Eliminar
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-                {!records.length && (
+          <>
+            <div className="filters">
+              <select
+                value={filterEstado}
+                onChange={(event) => setFilterEstado(event.target.value)}
+              >
+                <option value="">Todos los estados</option>
+                <option value="Activo">Activo</option>
+                <option value="Baja">Baja</option>
+              </select>
+            </div>
+            <div className="table-wrap">
+              <table>
+                <thead>
                   <tr>
-                    <td colSpan={includeCargo ? 6 : 5}>
-                      <div className="empty-state">
-                        No hay registros para mostrar.
-                      </div>
-                    </td>
+                    <th>DNI</th>
+                    <th>Apellido(s) y nombre(s)</th>
+                    <th>Email</th>
+                    <th>Teléfono</th>
+                    {includeCargo && <th>Cargo</th>}
+                    <th>Estado</th>
+                    <th>Acciones</th>
                   </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody>
+                  {filteredRecords.map((person) => (
+                    <tr key={person.dni}>
+                      <td>{person.dni}</td>
+                      <td>
+                        <strong>
+                          {person.apellido?.toLocaleUpperCase("es-AR")},{" "}
+                          {person.nombre}
+                        </strong>
+                      </td>
+                      <td>{person.email || "—"}</td>
+                      <td>{person.telefono || "—"}</td>
+                      {includeCargo && <td>{person.cargo || "—"}</td>}
+                      <td>
+                        <span
+                          className={`badge ${person.estado === "Activo" ? "badge-ok" : "badge-warn"}`}
+                        >
+                          {person.estado || "Activo"}
+                        </span>
+                      </td>
+                      <td>
+                        <div className="action-row">
+                          <button
+                            type="button"
+                            className="btn btn-ghost btn-sm"
+                            onClick={() => openEdit(person)}
+                          >
+                            Editar
+                          </button>
+                          <button
+                            type="button"
+                            className="btn btn-danger btn-sm"
+                            onClick={() => remove(person)}
+                          >
+                            Eliminar
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                  {!filteredRecords.length && (
+                    <tr>
+                      <td colSpan={includeCargo ? 7 : 6}>
+                        <div className="empty-state">
+                          No hay registros para mostrar.
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </>
         )}
       </div>
 
@@ -3360,6 +3387,19 @@ function PersonalAdminPage({
                 }
                 maxLength="30"
               />
+            </div>
+            <div className="field">
+              <label htmlFor={`${resource}-status`}>Estado</label>
+              <select
+                id={`${resource}-status`}
+                value={form.estado}
+                onChange={(event) =>
+                  setForm({ ...form, estado: event.target.value })
+                }
+              >
+                <option value="Activo">Activo</option>
+                <option value="Baja">Baja</option>
+              </select>
             </div>
             {includeCargo && (
               <div className="field">
@@ -3662,7 +3702,7 @@ function NotasPage({
 function ConsultaPage({ isAlumno, boletines, alumnos, cursos, pushToast }) {
   const [search, setSearch] = useState("");
   const [filterCurso, setFilterCurso] = useState("");
-  const [filterEstado, setFilterEstado] = useState("");
+  const [filterEstado, setFilterEstado] = useState("Activo");
   const [currentPage, setCurrentPage] = useState(1);
   const [selectedDni, setSelectedDni] = useState("");
   const [selectedBulletin, setSelectedBulletin] = useState(null);

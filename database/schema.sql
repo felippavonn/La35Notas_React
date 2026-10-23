@@ -480,7 +480,7 @@ CREATE TABLE IF NOT EXISTS profesor (
   email VARCHAR(150),
   telefono VARCHAR(30),
   estado VARCHAR(20) NOT NULL DEFAULT 'Activo' CHECK (
-    estado IN ('Activo', 'Licencia', 'Suplente', 'Baja')
+    estado IN ('Activo', 'Baja')
   ),
   id_domicilio INTEGER REFERENCES domicilio (id_domicilio)
 );
@@ -490,11 +490,21 @@ CREATE TABLE IF NOT EXISTS preceptor (
   nombre VARCHAR(80) NOT NULL,
   apellido VARCHAR(80) NOT NULL,
   email VARCHAR(150),
-  telefono VARCHAR(30)
+  telefono VARCHAR(30),
+  estado VARCHAR(20) NOT NULL DEFAULT 'Activo'
 );
 
 ALTER TABLE preceptor
 ADD COLUMN IF NOT EXISTS email VARCHAR(150);
+
+ALTER TABLE preceptor
+ADD COLUMN IF NOT EXISTS estado VARCHAR(20) NOT NULL DEFAULT 'Activo';
+
+ALTER TABLE preceptor
+DROP CONSTRAINT IF EXISTS preceptor_estado_check;
+
+ALTER TABLE preceptor
+ADD CONSTRAINT preceptor_estado_check CHECK (estado IN ('Activo', 'Baja'));
 
 CREATE TABLE IF NOT EXISTS administrador (
   dni VARCHAR(20) PRIMARY KEY,
@@ -505,11 +515,21 @@ CREATE TABLE IF NOT EXISTS administrador (
   cargo VARCHAR(30) CHECK (
     cargo IN ('Regente', 'Subregente')
     OR cargo IS NULL
-  )
+  ),
+  estado VARCHAR(20) NOT NULL DEFAULT 'Activo'
 );
 
 ALTER TABLE administrador
 ADD COLUMN IF NOT EXISTS email VARCHAR(150);
+
+ALTER TABLE administrador
+ADD COLUMN IF NOT EXISTS estado VARCHAR(20) NOT NULL DEFAULT 'Activo';
+
+ALTER TABLE administrador
+DROP CONSTRAINT IF EXISTS administrador_estado_check;
+
+ALTER TABLE administrador
+ADD CONSTRAINT administrador_estado_check CHECK (estado IN ('Activo', 'Baja'));
 
 ALTER TABLE profesor
 ADD COLUMN IF NOT EXISTS estado VARCHAR(20) NOT NULL DEFAULT 'Activo';
@@ -517,9 +537,13 @@ ADD COLUMN IF NOT EXISTS estado VARCHAR(20) NOT NULL DEFAULT 'Activo';
 ALTER TABLE profesor
 DROP CONSTRAINT IF EXISTS profesor_estado_check;
 
+UPDATE profesor
+SET estado='Activo'
+WHERE estado IN ('Licencia', 'Suplente');
+
 ALTER TABLE profesor
 ADD CONSTRAINT profesor_estado_check CHECK (
-  estado IN ('Activo', 'Licencia', 'Suplente', 'Baja')
+  estado IN ('Activo', 'Baja')
 );
 
 CREATE TABLE IF NOT EXISTS alumno (
@@ -623,6 +647,26 @@ ADD CONSTRAINT usuario_persona_check CHECK (
     dni_administrador
   ) <= 1
 );
+
+UPDATE usuario u
+SET estado=CASE WHEN a.estado='Activo' THEN 'Activo' ELSE 'Baja' END
+FROM alumno a
+WHERE u.dni_alumno=a.dni;
+
+UPDATE usuario u
+SET estado=CASE WHEN p.estado='Activo' THEN 'Activo' ELSE 'Baja' END
+FROM profesor p
+WHERE u.dni_profesor=p.dni;
+
+UPDATE usuario u
+SET estado=CASE WHEN p.estado='Activo' THEN 'Activo' ELSE 'Baja' END
+FROM preceptor p
+WHERE u.dni_preceptor=p.dni;
+
+UPDATE usuario u
+SET estado=CASE WHEN a.estado='Activo' THEN 'Activo' ELSE 'Baja' END
+FROM administrador a
+WHERE u.dni_administrador=a.dni;
 
 CREATE TABLE IF NOT EXISTS profesor_rol (
   dni_profesor VARCHAR(20) REFERENCES profesor (dni) ON DELETE CASCADE,
@@ -852,7 +896,8 @@ VALUES
   ('GPP', 'Gestión de los Procesos Productivos'),
   ('CYT', 'Ciencia y Tecnología'),
   ('CITT', 'Ciudadanía y Trabajo'),
-  ('ECI', 'Educación Ciudadana')
+  ('ECI', 'Educación Ciudadana'),
+  ('DTEC', 'Dibujo Técnico')
 ON CONFLICT (codigo) DO UPDATE
 SET
   nombre = EXCLUDED.nombre;

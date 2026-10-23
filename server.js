@@ -87,6 +87,36 @@ async function ensurePersonAccount(client, dni, role, dniColumn) {
   if (!rows[0]) throw new Error(`No se pudo crear la cuenta para ${dni}`);
 }
 
+async function syncPersonAccount(client, dni, role, dniColumn, isActive) {
+  if (isActive) {
+    const { rows } = await client.query(
+      `UPDATE usuario SET estado='Activo' WHERE ${dniColumn}=$1 RETURNING id_usuario`,
+      [dni],
+    );
+    if (rows[0]) return { userId: rows[0].id_usuario, isActive: true };
+
+    await ensurePersonAccount(client, dni, role, dniColumn);
+    const { rows: accountRows } = await client.query(
+      `SELECT id_usuario FROM usuario WHERE ${dniColumn}=$1`,
+      [dni],
+    );
+    return { userId: accountRows[0]?.id_usuario || null, isActive: true };
+  }
+
+  const { rows } = await client.query(
+    `UPDATE usuario SET estado='Baja' WHERE ${dniColumn}=$1 RETURNING id_usuario`,
+    [dni],
+  );
+  return { userId: rows[0]?.id_usuario || null, isActive: false };
+}
+
+function revokeAccountSessions(userId) {
+  if (!userId) return;
+  for (const [token, session] of tokens) {
+    if (session.user.id_usuario === userId) tokens.delete(token);
+  }
+}
+
 function fail(res, status, message) {
   return res.status(status).json({ error: message });
 }
@@ -521,7 +551,8 @@ app.post(
     `,
         [dni, nombre, apellido, email || null, estado],
       );
-      await ensurePersonAccount(client, dni, "alumno", "dni_alumno");
+      if (estado === "Activo")
+        await ensurePersonAccount(client, dni, "alumno", "dni_alumno");
       if (id_curso && estado === "Activo") {
         await client.query(
           `
@@ -557,6 +588,7 @@ app.put(
     const debeDesasignarCurso = estado !== undefined && estado !== "Activo";
 
     const client = await pool.connect();
+    let disabledAccountId;
     try {
       await client.query("BEGIN");
       const { rows } = await client.query(
@@ -724,7 +756,18 @@ app.put(
           }
         }
       }
+      if (estado !== undefined) {
+        const account = await syncPersonAccount(
+          client,
+          dni,
+          "alumno",
+          "dni_alumno",
+          estado === "Activo",
+        );
+        if (!account.isActive) disabledAccountId = account.userId;
+      }
       await client.query("COMMIT");
+      revokeAccountSessions(disabledAccountId);
       res.json(rows[0]);
     } catch (error) {
       await client.query("ROLLBACK");
@@ -805,13 +848,7 @@ app.delete(
 
       await client.query("COMMIT");
 
-      if (deletedUserId) {
-        for (const [token, session] of tokens) {
-          if (session.id_usuario === deletedUserId) {
-            tokens.delete(token);
-          }
-        }
-      }
+      revokeAccountSessions(deletedUserId);
 
       return res.json({ ok: true });
     } catch (error) {
@@ -896,7 +933,7 @@ app.get("/api/docentes", auth, async (req, res) => {
   }
 });
 
-const ESTADOS_DOCENTE = new Set(["Activo", "Licencia", "Suplente", "Baja"]);
+const ESTADOS_DOCENTE = new Set(["Activo", "Baja"]);
 
 function validateDocente(body) {
   if (!body || !/^\d{1,20}$/.test(String(body.dni || "")))
@@ -1057,7 +1094,8 @@ app.post(
           estado,
         ],
       );
-      await ensurePersonAccount(client, dni, "profesor", "dni_profesor");
+      if (estado === "Activo")
+        await ensurePersonAccount(client, dni, "profesor", "dni_profesor");
       await replaceTeacherAssignments(
         client,
         dni,
@@ -1089,6 +1127,7 @@ app.put(
     const validationError = validateDocente(req.body);
     if (validationError) return fail(res, 400, validationError);
     const client = await pool.connect();
+    let disabledAccountId;
     try {
       await client.query("BEGIN");
       const cycleId = await getCycleId(client, requestedCycleYear(req));
@@ -1119,7 +1158,16 @@ app.put(
         req.body.estado === "Baja" ? [] : req.body.asignaciones,
         cycleId,
       );
+      const account = await syncPersonAccount(
+        client,
+        dni,
+        "profesor",
+        "dni_profesor",
+        req.body.estado === "Activo",
+      );
+      if (!account.isActive) disabledAccountId = account.userId;
       await client.query("COMMIT");
+      revokeAccountSessions(disabledAccountId);
       res.json({ ok: true });
     } catch (error) {
       await client.query("ROLLBACK");
@@ -1193,7 +1241,7 @@ function registerPersonnelRoutes({
   app.get(`/api/${path}`, auth, roles("admin"), async (_req, res) => {
     try {
       const { rows } = await pool.query(`
-        SELECT dni, apellido, nombre, email, telefono${includeCargo ? ", cargo" : ""}
+        SELECT dni, apellido, nombre, email, telefono, estado${includeCargo ? ", cargo" : ""}
         FROM ${table}
         ORDER BY apellido, nombre
       `);
@@ -1211,6 +1259,7 @@ function registerPersonnelRoutes({
       nombre,
       email = "",
       telefono = "",
+      estado = "Activo",
       cargo = null,
     } = req.body || {};
     if (
@@ -1226,6 +1275,7 @@ function registerPersonnelRoutes({
       (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) ||
       typeof telefono !== "string" ||
       telefono.length > 30 ||
+      !["Activo", "Baja"].includes(estado) ||
       (includeCargo &&
         cargo != null &&
         !["Regente", "Subregente"].includes(cargo))
@@ -1238,8 +1288,8 @@ function registerPersonnelRoutes({
       await client.query("BEGIN");
       await client.query(
         `
-        INSERT INTO ${table} (dni, apellido, nombre, email, telefono${includeCargo ? ", cargo" : ""})
-        VALUES ($1,$2,$3,$4,$5${includeCargo ? ",$6" : ""})
+        INSERT INTO ${table} (dni, apellido, nombre, email, telefono, estado${includeCargo ? ", cargo" : ""})
+        VALUES ($1,$2,$3,$4,$5,$6${includeCargo ? ",$7" : ""})
       `,
         includeCargo
           ? [
@@ -1248,6 +1298,7 @@ function registerPersonnelRoutes({
               nombre.trim(),
               email || null,
               telefono || null,
+              estado,
               cargo,
             ]
           : [
@@ -1256,9 +1307,11 @@ function registerPersonnelRoutes({
               nombre.trim(),
               email || null,
               telefono || null,
+              estado,
             ],
       );
-      await ensurePersonAccount(client, dni, role, dniColumn);
+      if (estado === "Activo")
+        await ensurePersonAccount(client, dni, role, dniColumn);
       await client.query("COMMIT");
       res.status(201).json({ ok: true });
     } catch (error) {
@@ -1279,6 +1332,7 @@ function registerPersonnelRoutes({
       nombre,
       email = "",
       telefono = "",
+      estado = "Activo",
       cargo = null,
     } = req.body || {};
     if (
@@ -1294,6 +1348,7 @@ function registerPersonnelRoutes({
       (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) ||
       typeof telefono !== "string" ||
       telefono.length > 30 ||
+      !["Activo", "Baja"].includes(estado) ||
       (includeCargo &&
         cargo != null &&
         !["Regente", "Subregente"].includes(cargo))
@@ -1301,11 +1356,14 @@ function registerPersonnelRoutes({
       return fail(res, 400, `Los datos de ${role} no son válidos`);
     }
 
+    const client = await pool.connect();
+    let disabledAccountId;
     try {
-      const { rows } = await pool.query(
+      await client.query("BEGIN");
+      const { rows } = await client.query(
         `
         UPDATE ${table}
-        SET apellido=$2, nombre=$3, email=$4, telefono=$5${includeCargo ? ", cargo=$6" : ""}
+        SET apellido=$2, nombre=$3, email=$4, telefono=$5, estado=$6${includeCargo ? ", cargo=$7" : ""}
         WHERE dni=$1
         RETURNING dni
       `,
@@ -1316,6 +1374,7 @@ function registerPersonnelRoutes({
               nombre.trim(),
               email || null,
               telefono || null,
+              estado,
               cargo,
             ]
           : [
@@ -1324,13 +1383,30 @@ function registerPersonnelRoutes({
               nombre.trim(),
               email || null,
               telefono || null,
+              estado,
             ],
       );
-      if (!rows[0]) return fail(res, 404, `${role} no encontrado`);
+      if (!rows[0]) {
+        await client.query("ROLLBACK");
+        return fail(res, 404, `${role} no encontrado`);
+      }
+      const account = await syncPersonAccount(
+        client,
+        dni,
+        role,
+        dniColumn,
+        estado === "Activo",
+      );
+      if (!account.isActive) disabledAccountId = account.userId;
+      await client.query("COMMIT");
+      revokeAccountSessions(disabledAccountId);
       res.json({ ok: true });
     } catch (error) {
+      await client.query("ROLLBACK");
       console.error(error);
       fail(res, 400, `No se pudo modificar ${role}`);
+    } finally {
+      client.release();
     }
   });
 
@@ -1355,11 +1431,7 @@ function registerPersonnelRoutes({
       deletedUserId = deletedAccount.rows[0]?.id_usuario;
       await client.query(`DELETE FROM ${table} WHERE dni=$1`, [dni]);
       await client.query("COMMIT");
-      if (deletedUserId) {
-        for (const [token, session] of tokens) {
-          if (session.id_usuario === deletedUserId) tokens.delete(token);
-        }
-      }
+      revokeAccountSessions(deletedUserId);
       res.json({ ok: true });
     } catch (error) {
       await client.query("ROLLBACK");
