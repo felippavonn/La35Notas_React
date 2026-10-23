@@ -74,6 +74,7 @@ function App() {
   const [selectedCycleYear, setSelectedCycleYear] =
     useState(getActiveCycleYear);
   const [materias, setMaterias] = useState([]);
+  const [catalogoMaterias, setCatalogoMaterias] = useState([]);
   const [asignacionesDocente, setAsignacionesDocente] = useState([]);
   const [notas, setNotas] = useState([]);
   const [dashboard, setDashboard] = useState({
@@ -196,6 +197,7 @@ function App() {
         cursosData,
         turnosData,
         materiasData,
+        catalogoMateriasData,
         asignacionesData,
       ] = await Promise.all([
         apiFetch("/dashboard"),
@@ -203,6 +205,9 @@ function App() {
         apiFetch("/cursos"),
         session.rol === "admin" ? apiFetch("/turnos") : Promise.resolve([]),
         apiFetch("/materias"),
+        session.rol === "admin"
+          ? apiFetch("/materias/catalogo")
+          : Promise.resolve([]),
         session.rol === "profesor"
           ? apiFetch("/docente-asignaciones")
           : Promise.resolve([]),
@@ -212,6 +217,7 @@ function App() {
       setCursos(cursosData);
       setTurnos(turnosData);
       setMaterias(materiasData);
+      setCatalogoMaterias(catalogoMateriasData);
       setAsignacionesDocente(asignacionesData);
 
       if (!isAlumno) {
@@ -669,10 +675,22 @@ function App() {
     }
   }
 
+  async function assignMateria(codigo) {
+    try {
+      await apiFetch(`/materias/${encodeURIComponent(codigo)}/asignacion`, {
+        method: "POST",
+      });
+      pushToast("Materia asignada al ciclo lectivo");
+      await loadCoreData();
+    } catch (error) {
+      pushToast(error.message, "warn");
+    }
+  }
+
   async function deleteMateria(materia) {
     if (
       !window.confirm(
-        `¿Eliminar ${materia.nombre}? No se puede deshacer. No se pueden eliminar materias con cursos, profesores o notas asignadas en algún ciclo.`,
+        `¿Quitar ${materia.nombre} del ciclo actual? No se puede quitar si tiene cursos, profesores o notas asignadas. La materia seguirá disponible en el catálogo global.`,
       )
     )
       return;
@@ -681,7 +699,7 @@ function App() {
         method: "DELETE",
       });
       setModalMateria(null);
-      pushToast("Materia eliminada");
+      pushToast("Materia quitada del ciclo lectivo");
       await loadCoreData();
     } catch (error) {
       pushToast(error.message, "warn");
@@ -1280,8 +1298,10 @@ function App() {
           {page === "materias" && session?.rol === "admin" && (
             <MateriasPage
               materias={materias}
+              catalogoMaterias={catalogoMaterias}
               openNewMateria={openNewMateria}
               openEditMateria={openEditMateria}
+              onAssignMateria={assignMateria}
             />
           )}
           {page === "preceptores" && session?.rol === "admin" && (
@@ -1890,7 +1910,7 @@ function App() {
               {modalMateria.mode === "new" ? "Nueva materia" : "Editar materia"}
             </div>
             <div className="modal-sub">
-              Administrá los datos y la carga horaria de la materia.
+              Administrá la materia del catálogo global y su asignación al ciclo lectivo.
             </div>
             {modalMateria.mode === "new" && (
               <div className="field">
@@ -1925,7 +1945,8 @@ function App() {
             </div>
             {modalMateria.mode === "edit" && (
               <div className="course-delete-warning" role="note">
-                No se pueden eliminar materias con profesores o notas asignadas.
+                El nombre se comparte entre todos los ciclos. Esta acción quita
+                la materia solo del ciclo actual.
               </div>
             )}
             <div className="modal-footer">
@@ -1935,7 +1956,7 @@ function App() {
                   className="btn btn-danger"
                   onClick={() => deleteMateria(modalMateria.materia)}
                 >
-                  Eliminar materia
+                  Quitar del ciclo
                 </button>
               )}
               <button
@@ -2842,10 +2863,20 @@ function PaginationControls({
   );
 }
 
-function MateriasPage({ materias, openNewMateria, openEditMateria }) {
+function MateriasPage({
+  materias,
+  catalogoMaterias,
+  openNewMateria,
+  openEditMateria,
+  onAssignMateria,
+}) {
   const [selectedSubjectCode, setSelectedSubjectCode] = useState(null);
+  const [codigoParaAsignar, setCodigoParaAsignar] = useState("");
   const selectedSubject = materias.find(
     (materia) => materia.codigo === selectedSubjectCode,
+  );
+  const materiasDisponibles = catalogoMaterias.filter(
+    (materia) => !materia.asignada,
   );
 
   function toggleSubject(codigo) {
@@ -2863,9 +2894,45 @@ function MateriasPage({ materias, openNewMateria, openEditMateria }) {
         </button>
       </div>
       <p className="muted-text">
-        El catálogo es global y se comparte entre todos los ciclos lectivos.
-        Cada materia se registra una sola vez.
+        El catálogo es global; asigná al ciclo actual las materias que va a
+        utilizar. Cada materia se registra una sola vez.
       </p>
+      <div className="card" style={{ marginBottom: 20 }}>
+        <div className="filters">
+          <select
+            aria-label="Materia existente para asignar al ciclo"
+            value={codigoParaAsignar}
+            onChange={(event) => setCodigoParaAsignar(event.target.value)}
+            disabled={!materiasDisponibles.length}
+          >
+            <option value="">
+              {materiasDisponibles.length
+                ? "Seleccionar materia existente..."
+                : "Todas las materias están asignadas"}
+            </option>
+            {materiasDisponibles.map((materia) => (
+              <option key={materia.codigo} value={materia.codigo}>
+                {materia.nombre}
+              </option>
+            ))}
+          </select>
+          <button
+            type="button"
+            className="btn btn-blue"
+            disabled={
+              !materiasDisponibles.some(
+                (materia) => materia.codigo === codigoParaAsignar,
+              )
+            }
+            onClick={() => {
+              onAssignMateria(codigoParaAsignar);
+              setCodigoParaAsignar("");
+            }}
+          >
+            Asignar materia existente
+          </button>
+        </div>
+      </div>
       <div className="my-notas-grid">
         {materias.map((materia) => (
           <article

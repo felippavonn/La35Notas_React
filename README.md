@@ -102,13 +102,13 @@ La inicialización crea estas cuatro cuentas de demostración con el DNI como us
 - Administración de docentes para administradores y preceptores, con estado laboral, materias asignables sin curso y cursos por materia.
 - Gestión exclusiva para administradores de preceptores y administradores, con cuentas de acceso asociadas; los administradores pueden tener cargo de Regente o Subregente.
 - Listado y administración de cursos, con asignación y visualización de las materias existentes.
-- Catálogo global de materias: cada materia se guarda una sola vez y se reutiliza en todos los ciclos; los cursos conservan sus asignaciones por ciclo.
+- Catálogo global de materias: cada materia se guarda una sola vez y se puede asignar a los ciclos que la utilizan; los cursos conservan sus asignaciones por ciclo.
 - Al cambiar un alumno de curso dentro del ciclo lectivo: se borran sus notas generales e individuales si cambia de año; si cambia de especialidad se borran solo las notas de materias que no están en el nuevo curso; cambiar de división conserva todas las notas. Las notas conservadas se vinculan al curso nuevo.
 - Selector de ciclo lectivo exclusivo para administradores; los demás roles siempre consultan el ciclo más reciente.
-- Creación de ciclos lectivos con opción de copiar cursos y asignaciones docentes de otro ciclo; el catálogo global de materias y los turnos Mañana, Tarde y Noche se reutilizan en todos los ciclos.
+- Creación de ciclos lectivos con opción de copiar cursos, materias asignadas y asignaciones docentes de otro ciclo; el catálogo global de materias y los turnos Mañana, Tarde y Noche se reutilizan en todos los ciclos.
 - Selección de turnos Mañana, Tarde y Noche al crear o editar cursos.
 - Administración de ciclos lectivos para administradores, con bloqueo de eliminación si tienen datos asociados.
-- Administración de materias exclusiva para administradores, con consulta de docentes y protección ante eliminaciones con cursos, asignaciones o calificaciones asociados.
+- Administración de materias exclusiva para administradores: el catálogo global se asigna por ciclo y no se puede quitar una materia del ciclo si tiene cursos, asignaciones docentes o calificaciones asociados.
 - Carga y edición de calificaciones.
 - Registro de evaluaciones individuales por tema, período, estado y nota, con seguimiento de si se adeuda el tema cuando la nota es menor que 6.
 - Notificaciones persistentes al alumno al cargar calificaciones generales o individuales, con ciclo lectivo y opción de activarlas o desactivarlas (activadas por defecto); al eliminar notas se notifica siempre. Los indicadores distinguen aprobación, desaprobación con deuda y desaprobación sin deuda.
@@ -123,4 +123,4 @@ La inicialización crea estas cuatro cuentas de demostración con el DNI como us
 
 En una base vacía, el esquema crea el ciclo lectivo 2026, las especialidades Automotores y Computación, y 10 cursos de división 1: uno sin especialidad para 1.º y 2.º, y uno por especialidad de 3.º a 6.º. También crea las cuentas de demostración para administrador (DNI 1), preceptor (DNI 2), profesor (DNI 3) y alumno (DNI 4), con contraseña igual al DNI.
 
-El catálogo global inicial contiene una sola fila por materia: Matemática, Lengua y Literatura, Prácticas Profesionalizantes, Programación sobre Redes, Educación Física, Inglés, Historia, Desarrollo de Sistemas, Administración de Sistemas y Redes, Redes, Base de Datos, Gestión y Administración de base de datos, Física, Química, Gestión de los Procesos Productivos, Ciencia y Tecnología, Ciudadanía y Trabajo, Educación Ciudadana y Dibujo Técnico. Las mismas materias se reutilizan en todos los ciclos. Mañana, Tarde y Noche también forman un catálogo global y no guardan horarios.
+El catálogo global inicial contiene una sola fila por materia: Matemática, Lengua y Literatura, Prácticas Profesionalizantes, Programación sobre Redes, Educación Física, Inglés, Historia, Desarrollo de Sistemas, Administración de Sistemas y Redes, Redes, Base de Datos, Gestión y Administración de base de datos, Física, Química, Gestión de los Procesos Productivos, Ciencia y Tecnología, Ciudadanía y Trabajo, Educación Ciudadana y Dibujo Técnico. Cada ciclo lectivo puede asignar las materias del catálogo que utiliza. Mañana, Tarde y Noche también forman un catálogo global y no guardan horarios.

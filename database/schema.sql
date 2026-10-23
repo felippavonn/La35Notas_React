@@ -461,6 +461,15 @@ CREATE TABLE IF NOT EXISTS materia (
   nombre VARCHAR(100) NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS ciclo_materia (
+  id_ciclo_lectivo INTEGER NOT NULL REFERENCES ciclo_lectivo (id_ciclo_lectivo) ON DELETE CASCADE,
+  codigo_materia VARCHAR(20) NOT NULL REFERENCES materia (codigo) ON DELETE CASCADE,
+  PRIMARY KEY (id_ciclo_lectivo, codigo_materia)
+);
+
+ALTER TABLE ciclo_materia
+DROP COLUMN IF EXISTS nombre;
+
 CREATE TABLE IF NOT EXISTS app_schema_migration (
   nombre VARCHAR(100) PRIMARY KEY,
   ejecutada_en TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -982,7 +991,23 @@ ON CONFLICT (codigo) DO UPDATE
 SET
   nombre = EXCLUDED.nombre;
 
-DROP TABLE IF EXISTS ciclo_materia;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM app_schema_migration
+    WHERE nombre='catalogo_materias_por_ciclo_v2'
+  ) THEN
+    INSERT INTO ciclo_materia (id_ciclo_lectivo, codigo_materia)
+    SELECT ciclos.id_ciclo_lectivo, materias.codigo
+    FROM ciclo_lectivo ciclos
+    CROSS JOIN materia materias
+    ON CONFLICT (id_ciclo_lectivo, codigo_materia) DO NOTHING;
+
+    INSERT INTO app_schema_migration (nombre)
+    VALUES ('catalogo_materias_por_ciclo_v2');
+  END IF;
+END $$;
 
 INSERT INTO
   curso (anio, division, id_ciclo_lectivo, id_especialidad)
