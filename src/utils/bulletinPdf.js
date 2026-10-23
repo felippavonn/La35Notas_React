@@ -13,13 +13,6 @@ const periods = [
   ["FEBRERO", "Febrero"],
 ];
 
-const bimesterPeriods = [
-  ["BIMESTRE_1", "1.º bimestre"],
-  ["BIMESTRE_2", "2.º bimestre"],
-  ["BIMESTRE_3", "3.º bimestre"],
-  ["BIMESTRE_4", "4.º bimestre"],
-];
-
 function displayDate(value) {
   if (!value) return "";
   const date = String(value).slice(0, 10).split("-");
@@ -41,50 +34,6 @@ function gradeForPeriod(subject, period) {
   );
 }
 
-function getBimesterNotes(subjects, period) {
-  const entries = [];
-  for (const subject of subjects) {
-    for (const note of subject.notas || []) {
-      if (note.tipo_evaluacion === period && note.observacion?.trim())
-        entries.push(`${subject.nombre}: ${note.observacion.trim()}`);
-    }
-    for (const evaluation of subject.evaluaciones || []) {
-      if (evaluation.tipo_evaluacion !== period) continue;
-      const details = [
-        `${evaluation.tema}: ${displayGrade(evaluation.calificacion)}`,
-        evaluation.estado,
-      ];
-      if (evaluation.adeuda != null)
-        details.push(evaluation.adeuda ? "adeuda el tema" : "sin deuda");
-      entries.push(`${subject.nombre}: ${details.join(" · ")}`);
-    }
-  }
-  return entries.join("\n");
-}
-
-function getOtherObservations(subjects) {
-  const bimesters = new Set(bimesterPeriods.map(([period]) => period));
-  const entries = [];
-  for (const subject of subjects) {
-    for (const note of subject.notas || []) {
-      if (!bimesters.has(note.tipo_evaluacion) && note.observacion?.trim())
-        entries.push(`${subject.nombre}: ${note.observacion.trim()}`);
-    }
-  }
-  return entries.join("\n");
-}
-
-function formatCourse(course) {
-  if (!course) return "";
-  return [
-    course.anio == null || course.anio === "" ? "" : `${course.anio}°`,
-    course.division ? `${course.division}°` : "",
-    course.especialidad,
-  ]
-    .filter(Boolean)
-    .join(" — ");
-}
-
 export function createBulletinPdfDocument(student, cycle) {
   const course = cycle.cursos?.[0];
   const subjects = course?.materias || [];
@@ -104,24 +53,19 @@ export function createBulletinPdfDocument(student, cycle) {
   pdf.rect(left, 7, 23, 21);
   pdf.setFont("helvetica", "bold");
   pdf.setFontSize(13);
-  pdf.text(`INFORME ANUAL ${cycle.anio}`, pageWidth / 2, 14, {
+  pdf.text(`INFORME ANUAL ${cycle.anio}`, pageWidth / 2, 19, {
     align: "center",
   });
-  pdf.setFont("helvetica", "normal");
-  pdf.setFontSize(8);
-  pdf.text("CICLO LECTIVO", right, 13, { align: "right" });
-  pdf.setFont("helvetica", "bold");
-  pdf.setFontSize(10);
-  pdf.text(String(cycle.anio), right, 19, { align: "right" });
 
   const personalRows = [
+    ["APELLIDO", student.apellido || "", "Nombre", student.nombre || ""],
+    ["DNI", student.dni || "", "Especialidad", course?.especialidad || ""],
     [
-      "Alumno/a",
-      [student.apellido, student.nombre].filter(Boolean).join(", "),
-      "DNI",
-      student.dni || "",
+      "Año",
+      course?.anio == null ? "" : `${course.anio}°`,
+      "División",
+      course?.division == null ? "" : `${course.division}°`,
     ],
-    ["Curso", formatCourse(course), "Turno", course?.turno || ""],
     [
       "Nacimiento",
       displayDate(student.fecha_nacimiento),
@@ -135,10 +79,10 @@ export function createBulletinPdfDocument(student, cycle) {
       student.domicilio || "",
     ],
     [
+      "Turno",
+      course?.turno || "",
       "Promedio del ciclo",
       displayAverage(cycle.promedio),
-      "Ciclo lectivo",
-      String(cycle.anio),
     ],
   ];
 
@@ -157,10 +101,10 @@ export function createBulletinPdfDocument(student, cycle) {
       minCellHeight: 5.5,
     },
     columnStyles: {
-      0: { cellWidth: 24, fontStyle: "bold" },
+      0: { cellWidth: 27, fontStyle: "bold" },
       1: { cellWidth: 112 },
-      2: { cellWidth: 22, fontStyle: "bold" },
-      3: { cellWidth: 123 },
+      2: { cellWidth: 27, fontStyle: "bold" },
+      3: { cellWidth: 115 },
     },
   });
 
@@ -215,49 +159,8 @@ export function createBulletinPdfDocument(student, cycle) {
     rowPageBreak: "avoid",
   });
 
-  let observationsStartY = pdf.lastAutoTable.finalY + 5;
-  if (observationsStartY > pageHeight - 51) {
-    pdf.addPage("a4", "landscape");
-    observationsStartY = 14;
-  }
-  pdf.setFont("helvetica", "bold");
-  pdf.setFontSize(8);
-  pdf.text("VALORACIONES BIMESTRALES", left, observationsStartY + 2);
-  autoTable(pdf, {
-    startY: observationsStartY + 4,
-    margin: { left, right: pageWidth - right, bottom: 36 },
-    body: [
-      ...bimesterPeriods.map(([period, label]) => [
-        label,
-        getBimesterNotes(subjects, period),
-      ]),
-      ...(getOtherObservations(subjects)
-        ? [["Otros períodos", getOtherObservations(subjects)]]
-        : []),
-    ],
-    theme: "grid",
-    styles: {
-      font: "helvetica",
-      fontSize: 7,
-      textColor: 0,
-      lineColor: 70,
-      lineWidth: 0.15,
-      cellPadding: 1.5,
-      minCellHeight: 12,
-      valign: "middle",
-    },
-    columnStyles: {
-      0: { cellWidth: 34, fontStyle: "bold" },
-      1: { cellWidth: 247 },
-    },
-    rowPageBreak: "avoid",
-  });
-
-  let sealY = Math.max(pdf.lastAutoTable.finalY + 3, pageHeight - 31);
-  if (sealY + 24 > pageHeight - 5) {
-    pdf.addPage("a4", "landscape");
-    sealY = 13;
-  }
+  pdf.setPage(pdf.internal.getNumberOfPages());
+  const sealY = pageHeight - 28;
   pdf.setDrawColor(60, 60, 60);
   pdf.rect(right - 25, sealY, 25, 18);
   pdf.setFont("helvetica", "normal");

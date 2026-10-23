@@ -49,7 +49,11 @@ export async function apiFetch(path, options = {}) {
   const [requestPath, queryString = ""] = path.split("?");
   const params = new URLSearchParams(queryString);
 
-  if (activeCycleYear && !requestPath.startsWith("/ciclos-lectivos")) {
+  if (
+    activeCycleYear &&
+    !requestPath.startsWith("/ciclos-lectivos") &&
+    !requestPath.startsWith("/boletines/")
+  ) {
     params.set("ciclo_lectivo", String(activeCycleYear));
   }
 
