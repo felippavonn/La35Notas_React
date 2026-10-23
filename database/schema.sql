@@ -846,7 +846,7 @@ VALUES
   ('ASR', 'Administración de Sistemas y Redes'),
   ('RED', 'Redes'),
   ('BDD', 'Base de Datos'),
-  ('GABD','Gestión y Administración de base de datos'),
+  ('GABD','Gestión y Administración de Base de Datos'),
   ('FIS', 'Física'),
   ('QUI', 'Química'),
   ('GPP', 'Gestión de los Procesos Productivos'),
