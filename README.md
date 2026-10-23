@@ -39,7 +39,7 @@ Ya no hay un segundo `package.json`, ni otro `index.html`, ni un `api.js` global
 npm install
 ```
 
-6. Aplicar el esquema y las migraciones integradas:
+6. Aplicar el esquema inicial sobre una base PostgreSQL vacía:
 
 ```bash
 node scripts/init-db.cjs
@@ -47,7 +47,7 @@ node scripts/init-db.cjs
 
 ## Despliegue Cloudflare + Render
 
-- En Render, crea un servicio web con `npm install --include=dev && node scripts/init-db.cjs && npm run build` como comando de compilación y `npm run server` como comando de inicio. `--include=dev` instala Vite para compilar la interfaz. Configura `DATABASE_URL`, `DATABASE_SSL=true` si PostgreSQL requiere SSL, y `CORS_ORIGIN` con el dominio de Cloudflare Pages y cualquier dominio personalizado.
+- En Render, crea un servicio web con `npm install --include=dev && npm run build` como comando de compilación y `npm run server` como comando de inicio. `--include=dev` instala Vite para compilar la interfaz. Configura `DATABASE_URL`, `DATABASE_SSL=true` si PostgreSQL requiere SSL, y `CORS_ORIGIN` con el dominio de Cloudflare Pages y cualquier dominio personalizado.
 - En Cloudflare Pages, usa `npm run build` como comando de compilación y `dist` como directorio de salida. Define `VITE_API_URL` como la URL pública de la API de Render terminada en `/api` y `VITE_DEMO_MODE=false`.
 - Mañana, Tarde y Noche forman un catálogo global de turnos, independiente del ciclo lectivo, igual que las especialidades; el backend lo sirve desde `/api/turnos` y el modo demo usa una copia local. No se guardan horas de entrada, salida, prehora ni poshora.
 
@@ -119,7 +119,7 @@ La inicialización crea estas cuatro cuentas de demostración con el DNI como us
 
 ## Base de datos
 
-`scripts/init-db.cjs` ejecuta únicamente `database/schema.sql`, que ahora reúne el esquema actual y las migraciones del modelo anterior. Ejecutalo con PostgreSQL accesible y `DATABASE_URL` configurado tanto para inicializar una base vacía como para actualizar una existente.
+`scripts/init-db.cjs` ejecuta `database/schema.sql` únicamente sobre una base PostgreSQL vacía. No contiene migraciones ni actualiza instalaciones existentes. Ejecutalo una sola vez con `DATABASE_URL` configurado; no incluyas este comando en los builds recurrentes de Render, porque las tablas ya estarán creadas. Para Render, el build debe ser `npm install --include=dev && npm run build`.
 
 En una base vacía, el esquema crea el ciclo lectivo 2026, las especialidades Automotores y Computación, y 10 cursos de división 1: uno sin especialidad para 1.º y 2.º, y uno por especialidad de 3.º a 6.º. También crea las cuentas de demostración para administrador (DNI 1), preceptor (DNI 2), profesor (DNI 3) y alumno (DNI 4), con contraseña igual al DNI.
 
