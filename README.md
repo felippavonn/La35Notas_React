@@ -49,7 +49,7 @@ node scripts/init-db.cjs
 
 - En Render, crea un servicio web con `npm install --include=dev && node scripts/init-db.cjs && npm run build` como comando de compilación y `npm run server` como comando de inicio. `--include=dev` instala Vite para compilar la interfaz. Configura `DATABASE_URL`, `DATABASE_SSL=true` si PostgreSQL requiere SSL, y `CORS_ORIGIN` con el dominio de Cloudflare Pages y cualquier dominio personalizado.
 - En Cloudflare Pages, usa `npm run build` como comando de compilación y `dist` como directorio de salida. Define `VITE_API_URL` como la URL pública de la API de Render terminada en `/api` y `VITE_DEMO_MODE=false`.
-- Los turnos Mañana, Tarde y Noche son datos oficiales: el backend los sirve desde `/api/turnos` y los inicializa en la base de datos; el modo demo usa una copia local y no realiza llamadas al servidor. No se guardan horas de entrada, salida, prehora ni poshora.
+- Mañana, Tarde y Noche forman un catálogo global de turnos, independiente del ciclo lectivo, igual que las especialidades; el backend lo sirve desde `/api/turnos` y el modo demo usa una copia local. No se guardan horas de entrada, salida, prehora ni poshora.
 
 ## Ejecutar en desarrollo
 
@@ -102,9 +102,10 @@ La inicialización crea estas cuatro cuentas de demostración con el DNI como us
 - Administración de docentes para administradores y preceptores, con estado laboral, materias asignables sin curso y cursos por materia.
 - Gestión exclusiva para administradores de preceptores y administradores, con cuentas de acceso asociadas; los administradores pueden tener cargo de Regente o Subregente.
 - Listado y administración de cursos, con asignación y visualización de las materias existentes.
+- Catálogo global de materias: cada materia se guarda una sola vez y se reutiliza en todos los ciclos; los cursos conservan sus asignaciones por ciclo.
 - Al cambiar un alumno de curso dentro del ciclo lectivo: se borran sus notas generales e individuales si cambia de año; si cambia de especialidad se borran solo las notas de materias que no están en el nuevo curso; cambiar de división conserva todas las notas. Las notas conservadas se vinculan al curso nuevo.
 - Selector de ciclo lectivo exclusivo para administradores; los demás roles siempre consultan el ciclo más reciente.
-- Creación de ciclos lectivos con opción de copiar turnos, cursos, materias y asignaciones docentes de otro ciclo.
+- Creación de ciclos lectivos con opción de copiar cursos y asignaciones docentes de otro ciclo; el catálogo global de materias y los turnos Mañana, Tarde y Noche se reutilizan en todos los ciclos.
 - Selección de turnos Mañana, Tarde y Noche al crear o editar cursos.
 - Administración de ciclos lectivos para administradores, con bloqueo de eliminación si tienen datos asociados.
 - Administración de materias exclusiva para administradores, con consulta de docentes y protección ante eliminaciones con cursos, asignaciones o calificaciones asociados.
@@ -122,4 +123,4 @@ La inicialización crea estas cuatro cuentas de demostración con el DNI como us
 
 En una base vacía, el esquema crea el ciclo lectivo 2026, las especialidades Automotores y Computación, y 10 cursos de división 1: uno sin especialidad para 1.º y 2.º, y uno por especialidad de 3.º a 6.º. También crea las cuentas de demostración para administrador (DNI 1), preceptor (DNI 2), profesor (DNI 3) y alumno (DNI 4), con contraseña igual al DNI.
 
-El catálogo inicial contiene Matemática, Lengua y Literatura, Prácticas Profesionalizantes, Programación sobre Redes, Educación Física, Inglés, Historia, Desarrollo de Sistemas, Administración de Sistemas y Redes, Redes, Base de Datos, Gestión y Administración de base de datos, Física, Química, Gestión de los Procesos Productivos, Ciencia y Tecnología, Ciudadanía y Trabajo, Educación Ciudadana y Dibujo Técnico. Esas materias quedan asociadas al ciclo 2026. Los turnos Mañana, Tarde y Noche también se inicializan para ese ciclo, sin guardar horarios.
+El catálogo global inicial contiene una sola fila por materia: Matemática, Lengua y Literatura, Prácticas Profesionalizantes, Programación sobre Redes, Educación Física, Inglés, Historia, Desarrollo de Sistemas, Administración de Sistemas y Redes, Redes, Base de Datos, Gestión y Administración de base de datos, Física, Química, Gestión de los Procesos Productivos, Ciencia y Tecnología, Ciudadanía y Trabajo, Educación Ciudadana y Dibujo Técnico. Las mismas materias se reutilizan en todos los ciclos. Mañana, Tarde y Noche también forman un catálogo global y no guardan horarios.

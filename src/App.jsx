@@ -649,14 +649,20 @@ function App() {
     if (isNew) body.codigo = materiaForm.codigo.trim().toUpperCase();
 
     try {
-      await apiFetch(
+      const saved = await apiFetch(
         isNew
           ? "/materias"
           : `/materias/${encodeURIComponent(modalMateria.materia.codigo)}`,
         { method: isNew ? "POST" : "PUT", body: JSON.stringify(body) },
       );
       setModalMateria(null);
-      pushToast(isNew ? "Materia creada" : "Materia actualizada");
+      pushToast(
+        isNew && saved.reutilizada
+          ? `Se reutilizó ${saved.nombre} en todos los ciclos`
+          : isNew
+            ? "Materia creada"
+            : "Materia actualizada",
+      );
       await loadCoreData();
     } catch (error) {
       pushToast(error.message, "warn");
@@ -666,7 +672,7 @@ function App() {
   async function deleteMateria(materia) {
     if (
       !window.confirm(
-        `¿Eliminar ${materia.nombre}? No se puede deshacer. No se pueden eliminar materias con profesores o notas asignadas.`,
+        `¿Eliminar ${materia.nombre}? No se puede deshacer. No se pueden eliminar materias con cursos, profesores o notas asignadas en algún ciclo.`,
       )
     )
       return;
@@ -2856,6 +2862,10 @@ function MateriasPage({ materias, openNewMateria, openEditMateria }) {
           + Nueva materia
         </button>
       </div>
+      <p className="muted-text">
+        El catálogo es global y se comparte entre todos los ciclos lectivos.
+        Cada materia se registra una sola vez.
+      </p>
       <div className="my-notas-grid">
         {materias.map((materia) => (
           <article

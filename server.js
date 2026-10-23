@@ -202,8 +202,8 @@ async function replaceCourseSubjects(client, courseId, cycleId, subjectCodes) {
   const uniqueCodes = [...new Set(subjectCodes)];
   if (uniqueCodes.length) {
     const { rows } = await client.query(
-      "SELECT COUNT(*)::int AS count FROM ciclo_materia WHERE id_ciclo_lectivo=$1 AND codigo_materia=ANY($2::varchar[])",
-      [cycleId, uniqueCodes],
+      "SELECT COUNT(*)::int AS count FROM materia WHERE codigo=ANY($1::varchar[])",
+      [uniqueCodes],
     );
     if (rows[0].count !== uniqueCodes.length)
       throw new Error("Una o más materias no existen");
@@ -419,8 +419,7 @@ async function getStudentBulletins(dni) {
       WHERE dni_alumno=ac.dni_alumno AND id_curso=ac.id_curso
         AND id_ciclo_lectivo=ac.id_ciclo_lectivo
     ) subjects ON TRUE
-    LEFT JOIN ciclo_materia cm ON cm.codigo_materia=subjects.codigo_materia
-      AND cm.id_ciclo_lectivo=ac.id_ciclo_lectivo
+    LEFT JOIN materia cm ON cm.codigo=subjects.codigo_materia
     WHERE ac.dni_alumno=$1
     ORDER BY cl.anio DESC, c.anio, c.division, cm.nombre
   `,
@@ -585,12 +584,24 @@ app.put(
   async (req, res) => {
     const { dni } = req.params;
     const { nombre, apellido, email, estado, id_curso } = req.body;
-    const debeDesasignarCurso = estado !== undefined && estado !== "Activo";
 
     const client = await pool.connect();
     let disabledAccountId;
     try {
       await client.query("BEGIN");
+      const { rows: alumnoActual } = await client.query(
+        "SELECT estado FROM alumno WHERE dni=$1 FOR UPDATE",
+        [dni],
+      );
+      if (!alumnoActual[0]) {
+        await client.query("ROLLBACK");
+        return fail(res, 404, "Alumno no encontrado");
+      }
+      const debeDesasignarCurso =
+        estado !== undefined &&
+        estado !== null &&
+        estado !== "Activo" &&
+        estado !== alumnoActual[0].estado;
       const { rows } = await client.query(
         `
       UPDATE alumno
@@ -608,7 +619,11 @@ app.put(
         await client.query("ROLLBACK");
         return fail(res, 404, "Alumno no encontrado");
       }
-      if (id_curso !== undefined || debeDesasignarCurso) {
+      const debeActualizarCurso =
+        debeDesasignarCurso ||
+        (id_curso !== undefined &&
+          (estado === undefined || estado === "Activo"));
+      if (debeActualizarCurso) {
         const currentCycleId = await getCycleId(
           client,
           requestedCycleYear(req),
@@ -879,8 +894,7 @@ app.get("/api/docentes", auth, async (req, res) => {
              COALESCE((
                SELECT string_agg(DISTINCT m.nombre, ', ')
                FROM profesor_materia pm
-               JOIN ciclo_materia m ON m.codigo_materia=pm.codigo_materia
-                 AND m.id_ciclo_lectivo=pm.id_ciclo_lectivo
+               JOIN materia m ON m.codigo=pm.codigo_materia
                WHERE pm.dni_profesor=p.dni
                  AND pm.id_ciclo_lectivo=(SELECT id_ciclo_lectivo FROM ciclo_lectivo WHERE anio=COALESCE($1::integer, (SELECT MAX(anio) FROM ciclo_lectivo)) ORDER BY anio DESC LIMIT 1)
              ), '') AS materias,
@@ -893,7 +907,7 @@ app.get("/api/docentes", auth, async (req, res) => {
                    CASE WHEN e.nombre IS NULL THEN '' ELSE ' — ' || e.nombre END
                  ),
                  ', '
-               ),
+               ) FILTER (WHERE c.id_curso IS NOT NULL),
                ''
              ) AS cursos,
              COALESCE((
@@ -915,8 +929,7 @@ app.get("/api/docentes", auth, async (req, res) => {
                         ) ORDER BY c2.anio, c2.division, e2.nombre)
                           FILTER (WHERE c2.id_curso IS NOT NULL), '[]'::json) AS cursos
                  FROM profesor_materia pm
-                 JOIN ciclo_materia materia ON materia.codigo_materia=pm.codigo_materia
-                   AND materia.id_ciclo_lectivo=pm.id_ciclo_lectivo
+                 JOIN materia materia ON materia.codigo=pm.codigo_materia
                  LEFT JOIN profesor_curso_materia pcm ON pcm.dni_profesor=pm.dni_profesor
                    AND pcm.codigo_materia=pm.codigo_materia
                    AND pcm.id_ciclo_lectivo=pm.id_ciclo_lectivo
@@ -1029,8 +1042,8 @@ async function replaceTeacherAssignments(client, dni, assignments, cycleId) {
   }
   if (subjectCodes.length) {
     const { rows } = await client.query(
-      "SELECT codigo_materia FROM ciclo_materia WHERE id_ciclo_lectivo=$1 AND codigo_materia=ANY($2::varchar[])",
-      [cycleId, subjectCodes],
+      "SELECT codigo FROM materia WHERE codigo=ANY($1::varchar[])",
+      [subjectCodes],
     );
     if (rows.length !== subjectCodes.length)
       throw new Error("Una o más materias no existen");
@@ -1485,8 +1498,8 @@ app.get("/api/cursos", auth, async (req, res) => {
          t.id_turno AS turno_id,
              t.jornada AS turno,
              COALESCE(
-               JSONB_AGG(DISTINCT JSONB_BUILD_OBJECT('codigo', m.codigo_materia, 'nombre', m.nombre))
-                 FILTER (WHERE m.codigo_materia IS NOT NULL),
+               JSONB_AGG(DISTINCT JSONB_BUILD_OBJECT('codigo', m.codigo, 'nombre', m.nombre))
+                 FILTER (WHERE m.codigo IS NOT NULL),
                '[]'::jsonb
              ) AS materias
       FROM curso c
@@ -1498,11 +1511,9 @@ app.get("/api/cursos", auth, async (req, res) => {
       LEFT JOIN alumno a ON a.dni=ac.dni_alumno AND a.estado='Activo'
       LEFT JOIN curso_turno ct ON ct.id_curso=c.id_curso
       LEFT JOIN turno t ON t.id_turno=ct.id_turno
-        AND t.id_ciclo_lectivo=c.id_ciclo_lectivo
       LEFT JOIN curso_materia cm ON cm.id_curso=c.id_curso
         AND cm.id_ciclo_lectivo=c.id_ciclo_lectivo
-      LEFT JOIN ciclo_materia m ON m.codigo_materia=cm.codigo_materia
-        AND m.id_ciclo_lectivo=c.id_ciclo_lectivo
+      LEFT JOIN materia m ON m.codigo=cm.codigo_materia
       GROUP BY c.id_curso, cl.anio, e.nombre, t.id_turno, t.jornada
       HAVING cl.anio=COALESCE($1::integer, (SELECT MAX(anio) FROM ciclo_lectivo))
       ORDER BY c.anio, c.division
@@ -1586,8 +1597,8 @@ app.post("/api/cursos", auth, roles("admin"), async (req, res) => {
 
     if (turnoId !== null) {
       const turnoResult = await client.query(
-        "SELECT id_turno FROM turno WHERE id_turno=$1 AND id_ciclo_lectivo=$2",
-        [turnoId, cycleId],
+        "SELECT id_turno FROM turno WHERE id_turno=$1",
+        [turnoId],
       );
       if (!turnoResult.rows[0])
         throw new Error("El turno no pertenece al ciclo lectivo seleccionado");
@@ -1679,8 +1690,8 @@ app.put("/api/cursos/:id", auth, roles("admin"), async (req, res) => {
       ]);
     } else {
       const turnoResult = await client.query(
-        "SELECT id_turno FROM turno WHERE id_turno=$1 AND id_ciclo_lectivo=$2",
-        [turnoId, cycleId],
+        "SELECT id_turno FROM turno WHERE id_turno=$1",
+        [turnoId],
       );
       if (!turnoResult.rows[0])
         throw new Error("El turno no pertenece al ciclo lectivo seleccionado");
@@ -1814,33 +1825,13 @@ app.post("/api/ciclos-lectivos", auth, roles("admin"), async (req, res) => {
         `
         SELECT t.id_turno, t.jornada
         FROM turno t
-        WHERE t.id_ciclo_lectivo=$1
         ORDER BY t.id_turno
       `,
-        [sourceCycleId],
       );
       const turnIds = new Map();
       for (const turno of sourceTurns) {
-        const clonedTurn = await client.query(
-          `
-          INSERT INTO turno (jornada, id_ciclo_lectivo)
-          VALUES ($1,$2)
-          RETURNING id_turno
-        `,
-          [turno.jornada, targetCycleId],
-        );
-        turnIds.set(turno.id_turno, clonedTurn.rows[0].id_turno);
+        turnIds.set(turno.id_turno, turno.id_turno);
       }
-
-      await client.query(
-        `
-        INSERT INTO ciclo_materia (id_ciclo_lectivo, codigo_materia, nombre)
-        SELECT $1, codigo_materia, nombre
-        FROM ciclo_materia
-        WHERE id_ciclo_lectivo=$2
-      `,
-        [targetCycleId, sourceCycleId],
-      );
 
       const { rows: sourceCourses } = await client.query(
         `
@@ -1999,13 +1990,10 @@ app.delete(
 
 app.get("/api/turnos", auth, roles("admin"), async (req, res) => {
   try {
-    const cycleId = await getCycleId(pool, requestedCycleYear(req));
-    if (!cycleId) return res.json([]);
     const { rows } = await pool.query(
       `
       SELECT id_turno, jornada
       FROM turno
-      WHERE id_ciclo_lectivo=$1
       ORDER BY CASE jornada
         WHEN 'Mañana' THEN 1
         WHEN 'Tarde' THEN 2
@@ -2013,7 +2001,6 @@ app.get("/api/turnos", auth, roles("admin"), async (req, res) => {
         ELSE 4
       END, jornada
     `,
-      [cycleId],
     );
     res.json(rows);
   } catch (error) {
@@ -2022,104 +2009,19 @@ app.get("/api/turnos", auth, roles("admin"), async (req, res) => {
   }
 });
 
-function validateTurno(body) {
-  const jornada = typeof body?.jornada === "string" ? body.jornada.trim() : "";
-  if (!jornada || jornada.length > 30)
-    return { error: "El nombre del turno debe tener entre 1 y 30 caracteres" };
-  return { data: { jornada } };
-}
+const fixedTurnosError = (_req, res) =>
+  fail(res, 409, "Los turnos disponibles son fijos: Mañana, Tarde y Noche");
 
-app.post("/api/turnos", auth, roles("admin"), async (req, res) => {
-  const validation = validateTurno(req.body);
-  if (validation.error) return fail(res, 400, validation.error);
-  try {
-    const cycleId = await getCycleId(pool, requestedCycleYear(req));
-    if (!cycleId) return fail(res, 400, "No hay un ciclo lectivo seleccionado");
-    const { rows } = await pool.query(
-      `
-      INSERT INTO turno (jornada, id_ciclo_lectivo)
-      VALUES ($1,$2)
-      RETURNING id_turno, jornada
-    `,
-      [validation.data.jornada, cycleId],
-    );
-    res.status(201).json(rows[0]);
-  } catch (error) {
-    console.error(error);
-    fail(res, 400, "No se pudo crear el turno");
-  }
-});
-
-app.put("/api/turnos/:id", auth, roles("admin"), async (req, res) => {
-  const id = Number(req.params.id);
-  if (!Number.isInteger(id)) return fail(res, 400, "El turno no es válido");
-  const validation = validateTurno(req.body);
-  if (validation.error) return fail(res, 400, validation.error);
-  try {
-    const cycleId = await getCycleId(pool, requestedCycleYear(req));
-    if (!cycleId) return fail(res, 400, "No hay un ciclo lectivo seleccionado");
-    const { rows } = await pool.query(
-      `
-      UPDATE turno
-      SET jornada=$2
-      WHERE id_turno=$1 AND id_ciclo_lectivo=$3
-      RETURNING id_turno, jornada
-    `,
-      [id, validation.data.jornada, cycleId],
-    );
-    if (!rows[0]) return fail(res, 404, "Turno no encontrado");
-    res.json(rows[0]);
-  } catch (error) {
-    console.error(error);
-    fail(res, 400, "No se pudo modificar el turno");
-  }
-});
-
-app.delete("/api/turnos/:id", auth, roles("admin"), async (req, res) => {
-  const id = Number(req.params.id);
-  if (!Number.isInteger(id)) return fail(res, 400, "El turno no es válido");
-  try {
-    const cycleId = await getCycleId(pool, requestedCycleYear(req));
-    if (!cycleId) return fail(res, 400, "No hay un ciclo lectivo seleccionado");
-    const { rows } = await pool.query(
-      `
-      DELETE FROM turno t
-      WHERE t.id_turno=$1 AND t.id_ciclo_lectivo=$2
-        AND NOT EXISTS (
-          SELECT 1 FROM curso_turno ct
-          JOIN curso c ON c.id_curso=ct.id_curso
-          WHERE ct.id_turno=t.id_turno AND c.id_ciclo_lectivo=$2
-        )
-      RETURNING t.id_turno
-    `,
-      [id, cycleId],
-    );
-    if (!rows[0]) {
-      const exists = await pool.query(
-        "SELECT id_turno FROM turno WHERE id_turno=$1 AND id_ciclo_lectivo=$2",
-        [id, cycleId],
-      );
-      if (!exists.rows[0]) return fail(res, 404, "Turno no encontrado");
-      return fail(
-        res,
-        409,
-        "No se puede eliminar un turno con cursos asignados",
-      );
-    }
-    res.json({ ok: true });
-  } catch (error) {
-    console.error(error);
-    fail(res, 400, "No se pudo eliminar el turno");
-  }
-});
+app.post("/api/turnos", auth, roles("admin"), fixedTurnosError);
+app.put("/api/turnos/:id", auth, roles("admin"), fixedTurnosError);
+app.delete("/api/turnos/:id", auth, roles("admin"), fixedTurnosError);
 
 app.get("/api/materias", auth, async (req, res) => {
   try {
     const cycleId = await getCycleId(pool, requestedCycleYear(req));
-    if (!cycleId) return res.json([]);
     const { rows } = await pool.query(
       `
-      SELECT m.codigo, cm.nombre,
+      SELECT m.codigo, m.nombre,
              COALESCE(
                (
                  SELECT json_agg(json_build_object(
@@ -2143,18 +2045,16 @@ app.get("/api/materias", auth, async (req, res) => {
                    LEFT JOIN curso c ON c.id_curso=pcm.id_curso
                      AND c.id_ciclo_lectivo=pcm.id_ciclo_lectivo
                    LEFT JOIN especialidad e ON e.id_especialidad=c.id_especialidad
-                   WHERE pm.codigo_materia=cm.codigo_materia
-                     AND pm.id_ciclo_lectivo=cm.id_ciclo_lectivo
+                   WHERE pm.codigo_materia=m.codigo
+                     AND pm.id_ciclo_lectivo=$1
                    GROUP BY pm.dni_profesor
                  ) asignaciones
                  JOIN profesor p ON p.dni=asignaciones.dni_profesor
                ),
                '[]'::json
              ) AS profesores
-      FROM ciclo_materia cm
-      JOIN materia m ON m.codigo=cm.codigo_materia
-      WHERE cm.id_ciclo_lectivo=$1
-      ORDER BY cm.nombre
+      FROM materia m
+      ORDER BY m.nombre
     `,
       [cycleId],
     );
@@ -2186,26 +2086,32 @@ app.post("/api/materias", auth, roles("admin"), async (req, res) => {
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
-    const cycleId = await getCycleId(client, requestedCycleYear(req));
-    if (!cycleId) {
-      await client.query("ROLLBACK");
-      return fail(res, 400, "No hay un ciclo lectivo seleccionado");
-    }
     await client.query(
+      "SELECT pg_advisory_xact_lock(hashtextextended(LOWER(BTRIM($1)), 0))",
+      [nombre],
+    );
+    const { rows: existingName } = await client.query(
+      `
+      SELECT codigo, nombre
+      FROM materia
+      WHERE LOWER(BTRIM(nombre))=LOWER(BTRIM($1))
+      ORDER BY codigo
+      LIMIT 1
+      FOR UPDATE
+    `,
+      [nombre],
+    );
+    if (existingName[0]) {
+      await client.query("COMMIT");
+      return res.json({ ...existingName[0], profesores: [], reutilizada: true });
+    }
+    const { rows } = await client.query(
       `
       INSERT INTO materia (codigo, nombre)
       VALUES ($1,$2)
-      ON CONFLICT (codigo) DO NOTHING
+      RETURNING codigo, nombre
     `,
       [codigo, nombre],
-    );
-    const { rows } = await client.query(
-      `
-      INSERT INTO ciclo_materia (id_ciclo_lectivo, codigo_materia, nombre)
-      VALUES ($1,$2,$3)
-      RETURNING codigo_materia AS codigo, nombre
-    `,
-      [cycleId, codigo, nombre],
     );
     await client.query("COMMIT");
     res.status(201).json({ ...rows[0], profesores: [] });
@@ -2231,16 +2137,29 @@ app.put("/api/materias/:codigo", auth, roles("admin"), async (req, res) => {
     return fail(res, 400, "El nombre de la materia no es válido");
 
   try {
-    const cycleId = await getCycleId(pool, requestedCycleYear(req));
-    if (!cycleId) return fail(res, 400, "No hay un ciclo lectivo seleccionado");
+    const duplicate = await pool.query(
+      `
+      SELECT codigo
+      FROM materia
+      WHERE LOWER(BTRIM(nombre))=LOWER(BTRIM($1)) AND codigo<>$2
+      LIMIT 1
+    `,
+      [nombre, codigo],
+    );
+    if (duplicate.rows[0])
+      return fail(
+        res,
+        409,
+        `Ya existe la materia ${duplicate.rows[0].codigo}; se reutiliza en todos los ciclos`,
+      );
     const { rows } = await pool.query(
       `
-      UPDATE ciclo_materia
+      UPDATE materia
       SET nombre=$2
-      WHERE codigo_materia=$1 AND id_ciclo_lectivo=$3
-      RETURNING codigo_materia AS codigo, nombre
+      WHERE codigo=$1
+      RETURNING codigo, nombre
     `,
-      [codigo, nombre, cycleId],
+      [codigo, nombre],
     );
     if (!rows[0]) return fail(res, 404, "Materia no encontrada");
     res.json(rows[0]);
@@ -2258,10 +2177,9 @@ app.delete("/api/materias/:codigo", auth, roles("admin"), async (req, res) => {
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
-    const cycleId = await getCycleId(client, requestedCycleYear(req));
     const subjectResult = await client.query(
-      "SELECT codigo_materia FROM ciclo_materia WHERE codigo_materia=$1 AND id_ciclo_lectivo=$2 FOR UPDATE",
-      [codigo, cycleId],
+      "SELECT codigo FROM materia WHERE codigo=$1 FOR UPDATE",
+      [codigo],
     );
     if (!subjectResult.rows[0]) {
       await client.query("ROLLBACK");
@@ -2271,13 +2189,13 @@ app.delete("/api/materias/:codigo", auth, roles("admin"), async (req, res) => {
     const { rows } = await client.query(
       `
       SELECT
-        EXISTS(SELECT 1 FROM profesor_curso_materia WHERE codigo_materia=$1 AND id_ciclo_lectivo=$2) AS tiene_profesores,
-        EXISTS(SELECT 1 FROM profesor_materia WHERE codigo_materia=$1 AND id_ciclo_lectivo=$2) AS tiene_docentes,
-        EXISTS(SELECT 1 FROM curso_materia WHERE codigo_materia=$1 AND id_ciclo_lectivo=$2) AS tiene_cursos,
-        EXISTS(SELECT 1 FROM nota WHERE codigo_materia=$1 AND id_ciclo_lectivo=$2)
-          OR EXISTS(SELECT 1 FROM nota_individual WHERE codigo_materia=$1 AND id_ciclo_lectivo=$2) AS tiene_notas
+        EXISTS(SELECT 1 FROM profesor_curso_materia WHERE codigo_materia=$1) AS tiene_profesores,
+        EXISTS(SELECT 1 FROM profesor_materia WHERE codigo_materia=$1) AS tiene_docentes,
+        EXISTS(SELECT 1 FROM curso_materia WHERE codigo_materia=$1) AS tiene_cursos,
+        EXISTS(SELECT 1 FROM nota WHERE codigo_materia=$1)
+          OR EXISTS(SELECT 1 FROM nota_individual WHERE codigo_materia=$1) AS tiene_notas
     `,
-      [codigo, cycleId],
+      [codigo],
     );
     if (
       rows[0].tiene_profesores ||
@@ -2289,14 +2207,11 @@ app.delete("/api/materias/:codigo", auth, roles("admin"), async (req, res) => {
       return fail(
         res,
         409,
-        "No se puede eliminar una materia con cursos, profesores o notas asignadas",
+        "No se puede eliminar una materia que tenga cursos, profesores o notas asignadas en algún ciclo",
       );
     }
 
-    await client.query(
-      "DELETE FROM ciclo_materia WHERE codigo_materia=$1 AND id_ciclo_lectivo=$2",
-      [codigo, cycleId],
-    );
+    await client.query("DELETE FROM materia WHERE codigo=$1", [codigo]);
     await client.query("COMMIT");
     res.json({ ok: true });
   } catch (error) {
@@ -2360,8 +2275,7 @@ app.get("/api/notas", auth, async (req, res) => {
             LEFT JOIN nota n ON n.dni_alumno=a.dni
          AND n.id_ciclo_lectivo=ac.id_ciclo_lectivo
          AND n.id_curso=ac.id_curso
-      LEFT JOIN ciclo_materia m ON m.codigo_materia=n.codigo_materia
-        AND m.id_ciclo_lectivo=n.id_ciclo_lectivo
+      LEFT JOIN materia m ON m.codigo=n.codigo_materia
       WHERE ${where}
       ORDER BY a.apellido, a.nombre, n.tipo_evaluacion
     `,
@@ -2494,8 +2408,8 @@ app.post(
 
       if (req.body.notificar_alumno !== false) {
         const materiaResult = await pool.query(
-          "SELECT nombre FROM ciclo_materia WHERE codigo_materia=$1 AND id_ciclo_lectivo=$2",
-          [codigo_materia, id_ciclo_lectivo],
+          "SELECT nombre FROM materia WHERE codigo=$1",
+          [codigo_materia],
         );
         await notifyStudentGradeChange(
           dni_alumno,
@@ -2587,8 +2501,8 @@ app.delete(
 
       if (rows[0]) {
         const materiaResult = await pool.query(
-          "SELECT nombre FROM ciclo_materia WHERE codigo_materia=$1 AND id_ciclo_lectivo=$2",
-          [codigo_materia, id_ciclo_lectivo],
+          "SELECT nombre FROM materia WHERE codigo=$1",
+          [codigo_materia],
         );
         await notifyStudentGradeChange(
           dni_alumno,
@@ -2780,8 +2694,8 @@ app.post(
       );
       if (req.body.notificar_alumno !== false) {
         const materiaResult = await pool.query(
-          "SELECT nombre FROM ciclo_materia WHERE codigo_materia=$1 AND id_ciclo_lectivo=$2",
-          [req.body.codigo_materia, enrollment.id_ciclo_lectivo],
+          "SELECT nombre FROM materia WHERE codigo=$1",
+          [req.body.codigo_materia],
         );
         await notifyStudentGradeChange(
           req.body.dni_alumno,
@@ -2856,8 +2770,8 @@ app.put(
         return fail(res, 404, "No se encontró la evaluación individual");
       if (req.body.notificar_alumno !== false) {
         const materiaResult = await pool.query(
-          "SELECT nombre FROM ciclo_materia WHERE codigo_materia=$1 AND id_ciclo_lectivo=$2",
-          [req.body.codigo_materia, enrollment.id_ciclo_lectivo],
+          "SELECT nombre FROM materia WHERE codigo=$1",
+          [req.body.codigo_materia],
         );
         await notifyStudentGradeChange(
           req.body.dni_alumno,
@@ -2923,8 +2837,8 @@ app.delete(
       if (!rows[0])
         return fail(res, 404, "No se encontró la evaluación individual");
       const materiaResult = await pool.query(
-        "SELECT nombre FROM ciclo_materia WHERE codigo_materia=$1 AND id_ciclo_lectivo=$2",
-        [codigo_materia, enrollment.id_ciclo_lectivo],
+        "SELECT nombre FROM materia WHERE codigo=$1",
+        [codigo_materia],
       );
       await notifyStudentGradeChange(
         dni_alumno,
@@ -2944,18 +2858,17 @@ app.get("/api/mis-notas", auth, roles("alumno"), async (req, res) => {
   try {
     const { rows } = await pool.query(
       `
-      SELECT m.codigo_materia AS codigo, m.nombre AS materia,
+      SELECT m.codigo AS codigo, m.nombre AS materia,
              MAX(n.calificacion) FILTER (WHERE n.tipo_evaluacion='BIMESTRE_1') AS bim1,
              MAX(n.calificacion) FILTER (WHERE n.tipo_evaluacion='BIMESTRE_2') AS bim2,
              MAX(n.calificacion) FILTER (WHERE n.tipo_evaluacion='CUATRIMESTRE_1') AS cuat1,
              MAX(n.calificacion) FILTER (WHERE n.tipo_evaluacion='FINAL') AS final
-      FROM ciclo_materia m
-      JOIN nota n ON n.codigo_materia=m.codigo_materia
-        AND n.id_ciclo_lectivo=m.id_ciclo_lectivo
+      FROM materia m
+      JOIN nota n ON n.codigo_materia=m.codigo
       JOIN ciclo_lectivo cl ON cl.id_ciclo_lectivo=n.id_ciclo_lectivo
       WHERE n.dni_alumno=$1
         AND cl.anio=COALESCE($2::integer, (SELECT MAX(anio) FROM ciclo_lectivo))
-      GROUP BY m.codigo_materia, m.nombre
+      GROUP BY m.codigo, m.nombre
       ORDER BY m.nombre
     `,
       [req.user.dni_alumno, requestedCycleYear(req)],
@@ -2989,8 +2902,7 @@ app.get("/api/notificaciones", auth, async (req, res) => {
              CASE WHEN n.calificacion < 6 THEN 'Crítica' ELSE 'Informe' END AS tipo
       FROM nota n
       JOIN alumno a ON a.dni=n.dni_alumno
-      JOIN ciclo_materia m ON m.codigo_materia=n.codigo_materia
-        AND m.id_ciclo_lectivo=n.id_ciclo_lectivo
+      JOIN materia m ON m.codigo=n.codigo_materia
       JOIN ciclo_lectivo cl ON cl.id_ciclo_lectivo=n.id_ciclo_lectivo
       WHERE cl.anio=COALESCE($1::integer, (SELECT MAX(anio) FROM ciclo_lectivo))
       ORDER BY n.fecha DESC, n.id_nota DESC

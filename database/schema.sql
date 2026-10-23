@@ -404,61 +404,61 @@ CREATE TABLE IF NOT EXISTS curso_turno (
   id_turno INTEGER REFERENCES turno (id_turno) ON DELETE CASCADE
 );
 
-DO $$
-DECLARE
-    ciclo RECORD;
-    turno_actual RECORD;
-    turno_copiado INTEGER;
-BEGIN
-    FOR ciclo IN
-        SELECT id_ciclo_lectivo
-        FROM ciclo_lectivo
-        WHERE id_ciclo_lectivo <> (
-            SELECT id_ciclo_lectivo
-            FROM ciclo_lectivo
-            ORDER BY anio DESC
-            LIMIT 1
-        )
-    LOOP
-        FOR turno_actual IN
-            SELECT id_turno, jornada
-            FROM turno
-            WHERE id_ciclo_lectivo IS NULL
-        LOOP
-            INSERT INTO turno (jornada, id_ciclo_lectivo)
-            VALUES (turno_actual.jornada, ciclo.id_ciclo_lectivo)
-            RETURNING id_turno INTO turno_copiado;
+DELETE FROM curso_turno ct
+USING turno t
+WHERE ct.id_turno=t.id_turno
+  AND t.jornada NOT IN ('Mañana', 'Tarde', 'Noche');
 
-            UPDATE curso_turno ct
-            SET id_turno=turno_copiado
-            FROM curso c
-            WHERE ct.id_curso=c.id_curso
-              AND ct.id_turno=turno_actual.id_turno
-              AND c.id_ciclo_lectivo=ciclo.id_ciclo_lectivo;
-        END LOOP;
-    END LOOP;
+DELETE FROM turno
+WHERE jornada NOT IN ('Mañana', 'Tarde', 'Noche');
 
-    UPDATE turno
-    SET id_ciclo_lectivo=(
-        SELECT id_ciclo_lectivo
-        FROM ciclo_lectivo
-        ORDER BY anio DESC
-        LIMIT 1
-    )
-    WHERE id_ciclo_lectivo IS NULL
-      AND EXISTS (SELECT 1 FROM ciclo_lectivo);
-END $$;
+WITH turnos_canonicos AS (
+  SELECT jornada, MIN(id_turno) AS id_turno
+  FROM turno
+  GROUP BY jornada
+)
+UPDATE curso_turno ct
+SET id_turno=canonicos.id_turno
+FROM turno t
+JOIN turnos_canonicos canonicos
+  ON canonicos.jornada=t.jornada
+WHERE ct.id_turno=t.id_turno
+  AND ct.id_turno<>canonicos.id_turno;
+
+DELETE FROM turno t
+USING (
+  SELECT jornada, MIN(id_turno) AS id_turno
+  FROM turno
+  GROUP BY jornada
+) canonicos
+WHERE t.jornada=canonicos.jornada
+  AND t.id_turno<>canonicos.id_turno;
+
+DROP TRIGGER IF EXISTS ciclo_lectivo_crear_turnos ON ciclo_lectivo;
+DROP FUNCTION IF EXISTS crear_turnos_ciclo_lectivo();
+DROP INDEX IF EXISTS idx_turno_ciclo_jornada;
+
+ALTER TABLE turno
+DROP COLUMN IF EXISTS id_ciclo_lectivo;
+
+ALTER TABLE turno
+DROP CONSTRAINT IF EXISTS turno_jornada_check;
+
+ALTER TABLE turno
+ADD CONSTRAINT turno_jornada_check CHECK (
+  jornada IN ('Mañana', 'Tarde', 'Noche')
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_turno_jornada
+ON turno (jornada);
+
+INSERT INTO turno (jornada)
+VALUES ('Mañana'), ('Tarde'), ('Noche')
+ON CONFLICT (jornada) DO NOTHING;
 
 CREATE TABLE IF NOT EXISTS materia (
   codigo VARCHAR(20) PRIMARY KEY,
   nombre VARCHAR(100) NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS ciclo_materia (
-  id_ciclo_lectivo INTEGER NOT NULL REFERENCES ciclo_lectivo (id_ciclo_lectivo) ON DELETE CASCADE,
-  codigo_materia VARCHAR(20) NOT NULL REFERENCES materia (codigo) ON DELETE CASCADE,
-  nombre VARCHAR(100) NOT NULL,
-  PRIMARY KEY (id_ciclo_lectivo, codigo_materia)
 );
 
 CREATE TABLE IF NOT EXISTS app_schema_migration (
@@ -949,64 +949,6 @@ CREATE TABLE IF NOT EXISTS notificacion_alumno (
 
 CREATE INDEX IF NOT EXISTS idx_notificacion_alumno_fecha ON notificacion_alumno (dni_alumno, fecha DESC);
 
--- Catálogos iniciales compartidos por los ciclos lectivos.
-INSERT INTO
-  turno (jornada, id_ciclo_lectivo)
-SELECT
-  'Mañana',
-  id_ciclo_lectivo
-FROM
-  ciclo_lectivo
-WHERE
-  anio = 2026
-  AND NOT EXISTS (
-    SELECT
-      1
-    FROM
-      turno
-    WHERE
-      jornada = 'Mañana'
-      AND id_ciclo_lectivo = ciclo_lectivo.id_ciclo_lectivo
-  );
-
-INSERT INTO
-  turno (jornada, id_ciclo_lectivo)
-SELECT
-  'Tarde',
-  id_ciclo_lectivo
-FROM
-  ciclo_lectivo
-WHERE
-  anio = 2026
-  AND NOT EXISTS (
-    SELECT
-      1
-    FROM
-      turno
-    WHERE
-      jornada = 'Tarde'
-      AND id_ciclo_lectivo = ciclo_lectivo.id_ciclo_lectivo
-  );
-
-INSERT INTO
-  turno (jornada, id_ciclo_lectivo)
-SELECT
-  'Noche',
-  id_ciclo_lectivo
-FROM
-  ciclo_lectivo
-WHERE
-  anio = 2026
-  AND NOT EXISTS (
-    SELECT
-      1
-    FROM
-      turno
-    WHERE
-      jornada = 'Noche'
-      AND id_ciclo_lectivo = ciclo_lectivo.id_ciclo_lectivo
-  );
-
 INSERT INTO
   especialidad (nombre)
 VALUES
@@ -1040,36 +982,7 @@ ON CONFLICT (codigo) DO UPDATE
 SET
   nombre = EXCLUDED.nombre;
 
-DO $$
-BEGIN
-    IF NOT EXISTS (
-        SELECT 1 FROM app_schema_migration WHERE nombre='ciclo_materia_por_ciclo_v1'
-    ) THEN
-        INSERT INTO ciclo_materia (id_ciclo_lectivo, codigo_materia, nombre)
-        SELECT cl.id_ciclo_lectivo, m.codigo, m.nombre
-        FROM ciclo_lectivo cl
-        CROSS JOIN materia m
-        ON CONFLICT (id_ciclo_lectivo, codigo_materia) DO NOTHING;
-
-        INSERT INTO app_schema_migration (nombre)
-        VALUES ('ciclo_materia_por_ciclo_v1');
-    END IF;
-END $$;
-
-INSERT INTO
-  ciclo_materia (id_ciclo_lectivo, codigo_materia, nombre)
-SELECT
-  cl.id_ciclo_lectivo,
-  m.codigo,
-  m.nombre
-FROM
-  ciclo_lectivo cl
-  CROSS JOIN materia m
-WHERE
-  cl.anio = 2026
-ON CONFLICT (id_ciclo_lectivo, codigo_materia) DO UPDATE
-SET
-  nombre = EXCLUDED.nombre;
+DROP TABLE IF EXISTS ciclo_materia;
 
 INSERT INTO
   curso (anio, division, id_ciclo_lectivo, id_especialidad)
