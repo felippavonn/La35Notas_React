@@ -6,11 +6,16 @@ Migración de la aplicación anterior a una única estructura de proyecto.
 
 ```text
 La35Notas_React/
+├── database/
+│   └── schema.sql
+├── scripts/
+│   └── init-db.cjs
 ├── src/
 │   ├── App.jsx
 │   ├── main.jsx
 │   ├── styles.css
-│   └── services/api.js
+│   ├── services/api.js
+│   └── utils/bulletinPdf.js
 ├── server.js
 ├── index.html
 ├── package.json
