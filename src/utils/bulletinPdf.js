@@ -2,29 +2,19 @@ import { jsPDF } from "jspdf";
 import autoTable from "jspdf-autotable";
 
 const periods = [
-  ["BIMESTRE_1", "Valoración 1.º bimestre"],
-  ["BIMESTRE_2", "Valoración 2.º bimestre"],
+  ["BIMESTRE_1", "1.º bimestre"],
+  ["BIMESTRE_2", "2.º bimestre"],
   ["CUATRIMESTRE_1", "1.er cuatrimestre"],
-  ["BIMESTRE_3", "Valoración 3.º bimestre"],
-  ["BIMESTRE_4", "Valoración 4.º bimestre"],
+  ["BIMESTRE_3", "3.º bimestre"],
+  ["BIMESTRE_4", "4.º bimestre"],
   ["CUATRIMESTRE_2", "2.º cuatrimestre"],
   ["FINAL", "Final"],
   ["DICIEMBRE", "Diciembre"],
   ["FEBRERO", "Febrero"],
 ];
 
-function displayDate(value) {
-  if (!value) return "";
-  const date = String(value).slice(0, 10).split("-");
-  return date.length === 3 ? `${date[2]}/${date[1]}/${date[0]}` : "";
-}
-
 function displayGrade(value) {
   return value == null || value === "" ? "" : String(Number(value));
-}
-
-function displayAverage(value) {
-  return value == null || value === "" ? "" : Number(value).toFixed(2);
 }
 
 function gradeForPeriod(subject, period) {
@@ -65,24 +55,6 @@ export function createBulletinPdfDocument(student, cycle) {
       course?.anio == null ? "" : `${course.anio}°`,
       "División",
       course?.division == null ? "" : `${course.division}°`,
-    ],
-    [
-      "Nacimiento",
-      displayDate(student.fecha_nacimiento),
-      "Género",
-      student.genero || "",
-    ],
-    [
-      "Nacionalidad",
-      student.nacionalidad || "",
-      "Domicilio",
-      student.domicilio || "",
-    ],
-    [
-      "Turno",
-      course?.turno || "",
-      "Promedio del ciclo",
-      displayAverage(cycle.promedio),
     ],
   ];
 
