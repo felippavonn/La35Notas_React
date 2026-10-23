@@ -2471,7 +2471,7 @@ function AlumnosPage({
         <div className="filters">
           <input
             type="search"
-            placeholder="Buscar por nombre o DNI…"
+            placeholder="Buscar por nombre, apellido o DNI..."
             value={search}
             onChange={(e) => {
               setSearch(e.target.value);
@@ -2676,7 +2676,7 @@ function DocentesPage({
         <div className="filters">
           <input
             type="search"
-            placeholder="Buscar por nombre, apellido o DNI…"
+            placeholder="Buscar por nombre, apellido o DNI..."
             value={search}
             onChange={(event) => {
               setSearch(event.target.value);
@@ -3137,10 +3137,21 @@ function PersonalAdminPage({
     estado: "Activo",
   });
   const [filterEstado, setFilterEstado] = useState("Activo");
+  const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
-  const filteredRecords = records.filter(
-    (person) => !filterEstado || person.estado === filterEstado,
-  );
+  const searchTerms = search
+    .trim()
+    .toLocaleLowerCase("es-AR")
+    .split(/\s+/)
+    .filter(Boolean);
+  const filteredRecords = records.filter((person) => {
+    const searchableText = `${person.dni} ${person.apellido} ${person.nombre}`
+      .toLocaleLowerCase("es-AR");
+    return (
+      (!filterEstado || person.estado === filterEstado) &&
+      searchTerms.every((term) => searchableText.includes(term))
+    );
+  });
 
   async function loadRecords() {
     setLoading(true);
@@ -3244,6 +3255,12 @@ function PersonalAdminPage({
         ) : (
           <>
             <div className="filters">
+              <input
+                type="search"
+                placeholder="Buscar por nombre, apellido o DNI..."
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+              />
               <select
                 value={filterEstado}
                 onChange={(event) => setFilterEstado(event.target.value)}
@@ -3792,7 +3809,7 @@ function ConsultaPage({ isAlumno, boletines, alumnos, cursos, pushToast }) {
         <div className="filters">
           <input
             type="search"
-            placeholder="Buscar por DNI, apellido o nombre…"
+            placeholder="Buscar por nombre, apellido o DNI..."
             value={search}
             onChange={(event) => setSearch(event.target.value)}
           />
@@ -3846,7 +3863,7 @@ function ConsultaPage({ isAlumno, boletines, alumnos, cursos, pushToast }) {
                   <td>
                     <span className="badge badge-blue">
                       {alumno.anio
-                        ? `${alumno.anio}° ${alumno.division}° — ${alumno.especialidad || ""}`
+                        ? `${alumno.anio}° ${alumno.division}°${alumno.especialidad ? ` — ${alumno.especialidad}` : ""}`
                         : "—"}
                     </span>
                   </td>
