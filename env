@@ -1,7 +1,0 @@
-DB_HOST=dpg-dbbs9ivf3r2c73bl7spg-a
-DB_PORT=5432
-DB_NAME=gestion_notas_db_1f11
-DB_USER=gestion_notas_db_1f11_user
-DB_PASSWORD=8V3kIepQMtK6PDFb9mtHyb3vhJQ9wCHN
-PORT=3000
-VITE_API_URL=/api

@@ -32,14 +32,14 @@ Ya no hay un segundo `package.json`, ni otro `index.html`, ni un `api.js` global
 1. Copiar `.env.example` como `.env`.
 2. Configurar `DATABASE_URL` con la conexión PostgreSQL. Dejar `DATABASE_SSL=false` para una instalación local; usar `true` si el proveedor requiere SSL.
 3. `CORS_ORIGIN` acepta una lista separada por comas de los orígenes permitidos. Para producción, configura el dominio de Cloudflare Pages.
-4. Para usar la demo completamente local, configurar `VITE_DEMO_MODE=true`; por defecto la interfaz se conecta al backend y a PostgreSQL. Los horarios oficiales se comparten entre la demo local y la base de datos.
+4. Para usar la demo completamente local, configurar `VITE_DEMO_MODE=true`; por defecto la interfaz se conecta al backend y a PostgreSQL. Los turnos Mañana, Tarde y Noche se comparten entre la demo local y la base de datos, sin almacenar horarios.
 5. Instalar las dependencias:
 
 ```bash
 npm install
 ```
 
-6. Aplicar la migración y el esquema:
+6. Aplicar el esquema y las migraciones integradas:
 
 ```bash
 node scripts/init-db.cjs
@@ -49,7 +49,7 @@ node scripts/init-db.cjs
 
 - En Render, crea un servicio web con `npm install && npm run build` como comando de compilación y `npm run server` como comando de inicio. Configura `DATABASE_URL`, `DATABASE_SSL=true` si PostgreSQL requiere SSL, y `CORS_ORIGIN` con el dominio de Cloudflare Pages y cualquier dominio personalizado.
 - En Cloudflare Pages, usa `npm run build` como comando de compilación y `dist` como directorio de salida. Define `VITE_API_URL` como la URL pública de la API de Render terminada en `/api` y `VITE_DEMO_MODE=false`.
-- Los turnos son datos oficiales: el backend los sirve desde `/api/turnos` y los inicializa en la base de datos; el modo demo usa una copia local de esos mismos horarios y no realiza llamadas al servidor.
+- Los turnos Mañana, Tarde y Noche son datos oficiales: el backend los sirve desde `/api/turnos` y los inicializa en la base de datos; el modo demo usa una copia local y no realiza llamadas al servidor. No se guardan horas de entrada, salida, prehora ni poshora.
 
 ## Ejecutar en desarrollo
 
@@ -82,14 +82,14 @@ Cuando existe `dist/`, Express la sirve desde `http://localhost:3000`.
 
 La contraseña de cada cuenta es su propio DNI:
 
-| Usuario | Rol |
-|---|---|
-| `1` | Administrador |
-| `2` | Preceptor |
-| `3` | Profesor |
-| `4` | Alumno |
+| Usuario | Rol           |
+| ------- | ------------- |
+| `1`     | Administrador |
+| `2`     | Preceptor     |
+| `3`     | Profesor      |
+| `4`     | Alumno        |
 
-El backend crea esos usuarios automáticamente si las tablas correspondientes ya existen. También crea cuentas para todos los alumnos, docentes, preceptores y administradores registrados que todavía no tengan una cuenta asociada, y actualiza las contraseñas de las cuentas vinculadas para que coincidan con el DNI. Las nuevas cuentas usan el DNI como usuario y contraseña.
+La inicialización crea estas cuatro cuentas de demostración con el DNI como usuario y contraseña. Al arrancar, el backend también crea cuentas para las demás personas registradas que todavía no tengan una cuenta asociada y sincroniza las contraseñas de las cuentas vinculadas con su DNI.
 
 ## Qué quedó conectado
 
@@ -102,9 +102,10 @@ El backend crea esos usuarios automáticamente si las tablas correspondientes ya
 - Administración de docentes para administradores y preceptores, con estado laboral, materias asignables sin curso y cursos por materia.
 - Gestión exclusiva para administradores de preceptores y administradores, con cuentas de acceso asociadas; los administradores pueden tener cargo de Regente o Subregente.
 - Listado y administración de cursos, con asignación y visualización de las materias existentes.
+- Al cambiar un alumno de curso dentro del ciclo lectivo: se borran sus notas generales e individuales si cambia de año; si cambia de especialidad se borran solo las notas de materias que no están en el nuevo curso; cambiar de división conserva todas las notas. Las notas conservadas se vinculan al curso nuevo.
 - Selector de ciclo lectivo exclusivo para administradores; los demás roles siempre consultan el ciclo más reciente.
 - Creación de ciclos lectivos con opción de copiar turnos, cursos, materias y asignaciones docentes de otro ciclo.
-- Administración de turnos y horarios, con bloqueo de eliminación cuando hay cursos asignados.
+- Selección de turnos Mañana, Tarde y Noche al crear o editar cursos.
 - Administración de ciclos lectivos para administradores, con bloqueo de eliminación si tienen datos asociados.
 - Administración de materias exclusiva para administradores, con consulta de docentes y protección ante eliminaciones con cursos, asignaciones o calificaciones asociados.
 - Carga y edición de calificaciones.
@@ -112,10 +113,13 @@ El backend crea esos usuarios automáticamente si las tablas correspondientes ya
 - Notificaciones persistentes al alumno al cargar calificaciones generales o individuales, con ciclo lectivo y opción de activarlas o desactivarlas (activadas por defecto); al eliminar notas se notifica siempre. Los indicadores distinguen aprobación, desaprobación con deuda y desaprobación sin deuda.
 - Notificaciones del alumno agrupadas por año.
 - Promedio sugerido para bimestre 1 + bimestre 2.
-- Boletines con búsqueda por DNI y nombre, filtros por curso y estado, promedios anuales y generales, historial de calificaciones paginado y acceso del alumno a todos sus ciclos lectivos.
+- Boletines con búsqueda por DNI y nombre, filtros por curso y estado, promedios anuales y generales, historial de calificaciones paginado y acceso del alumno a todos sus ciclos lectivos. Cada ciclo muestra un solo curso: el vigente o, si ya no hay una inscripción vigente, el último de ese ciclo.
 - Notificaciones y alertas a partir de las notas.
 
 ## Base de datos
 
-`scripts/init-db.cjs` aplica la migración del modelo anterior y luego el esquema actual, incluidos el estado de docentes, los perfiles de preceptores y administradores y sus relaciones con las cuentas, los datos de turnos y materias por ciclo lectivo, las materias asignadas a cursos y docentes, la tabla de evaluaciones individuales y el seguimiento de temas adeudados. Ejecutalo con PostgreSQL accesible y `DATABASE_URL` configurado al inicializar o actualizar la base. Al arrancar, el backend sincroniza las contraseñas de las cuentas asociadas con el DNI de cada persona.
-El esquema inicializa las materias Matemática, Lengua y Literatura, Prácticas Profesionalizantes, Programación sobre Redes y Educación Física, además de crear 12 cursos para el ciclo actual: seis años y dos especialidades, Automotores y Computación, ambas en división 1. Los turnos se relacionan con el curso sin generar tarjetas duplicadas.
+`scripts/init-db.cjs` ejecuta únicamente `database/schema.sql`, que ahora reúne el esquema actual y las migraciones del modelo anterior. Ejecutalo con PostgreSQL accesible y `DATABASE_URL` configurado tanto para inicializar una base vacía como para actualizar una existente.
+
+En una base vacía, el esquema crea el ciclo lectivo 2026, las especialidades Automotores y Computación, y 12 cursos: de 1.º a 6.º, división 1, en ambas especialidades. También crea las cuentas de demostración para administrador (DNI 1), preceptor (DNI 2), profesor (DNI 3) y alumno (DNI 4), con contraseña igual al DNI.
+
+El catálogo inicial contiene Matemática, Lengua y Literatura, Prácticas Profesionalizantes, Programación sobre Redes, Educación Física, Inglés, Historia, Desarrollo de Sistemas, Administración de Sistemas y Redes, Redes, Base de Datos, Gestión y Administración de base de datos, Física, Química, Gestión de los Procesos Productivos, Ciencia y Tecnología, Ciudadanía y Trabajo, y Educación Ciudadana. Esas materias quedan asociadas al ciclo 2026. Los turnos Mañana, Tarde y Noche también se inicializan para ese ciclo, sin guardar horarios.
