@@ -94,7 +94,7 @@ La inicialización crea estas cuatro cuentas de demostración con el DNI como us
 ## Qué quedó conectado
 
 - Login real contra PostgreSQL.
-- Sesión persistida en `localStorage` mediante token de memoria del backend.
+- La sesión se conserva en `localStorage`; al volver a abrir la aplicación, continúa abierta hasta cerrar sesión.
 - Dashboard con datos reales.
 - Listado y filtros de alumnos.
 - Alta y modificación de alumnos según rol.

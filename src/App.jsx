@@ -57,7 +57,9 @@ function App() {
       ? "notas"
       : role === "preceptor"
         ? "alumnos"
-        : "dashboard";
+        : role === "alumno"
+          ? "consulta"
+          : "dashboard";
   });
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [toast, setToast] = useState([]);
