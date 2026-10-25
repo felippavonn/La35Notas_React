@@ -250,12 +250,19 @@ app.post("/api/login", async (req, res) => {
       return fail(res, 400, "Ingresá un DNI válido");
 
     const user = await getUserByLogin(usuario);
-    if (!user || user.estado !== "Activo") {
+    if (!user || (user.estado !== "Activo" && user.rol !== "alumno")) {
       return fail(res, 401, "Usuario o contraseña incorrectos");
     }
 
     const ok = await bcrypt.compare(contrasenia, user.contrasenia);
     if (!ok) return fail(res, 401, "Usuario o contraseña incorrectos");
+
+    if (user.rol === "alumno" && user.estado !== "Activo") {
+      await pool.query(
+        "UPDATE usuario SET estado='Activo' WHERE id_usuario=$1",
+        [user.id_usuario],
+      );
+    }
 
     const token = crypto.randomBytes(32).toString("hex");
     const session = {
@@ -587,8 +594,7 @@ app.post(
     `,
         [dni, nombre, apellido, email || null, estado],
       );
-      if (estado === "Activo")
-        await ensurePersonAccount(client, dni, "alumno", "dni_alumno");
+      await ensurePersonAccount(client, dni, "alumno", "dni_alumno");
       if (id_curso && estado === "Activo") {
         await client.query(
           `
@@ -623,7 +629,6 @@ app.put(
     const { nombre, apellido, email, estado, id_curso } = req.body;
 
     const client = await pool.connect();
-    let disabledAccountId;
     try {
       await client.query("BEGIN");
       const { rows: alumnoActual } = await client.query(
@@ -808,18 +813,14 @@ app.put(
           }
         }
       }
-      if (estado !== undefined) {
-        const account = await syncPersonAccount(
-          client,
-          dni,
-          "alumno",
-          "dni_alumno",
-          estado === "Activo",
-        );
-        if (!account.isActive) disabledAccountId = account.userId;
-      }
+      await syncPersonAccount(
+        client,
+        dni,
+        "alumno",
+        "dni_alumno",
+        true,
+      );
       await client.query("COMMIT");
-      revokeAccountSessions(disabledAccountId);
       res.json(rows[0]);
     } catch (error) {
       await client.query("ROLLBACK");
