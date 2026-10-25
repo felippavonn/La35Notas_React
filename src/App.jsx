@@ -356,16 +356,22 @@ function App() {
         )
       : cursos;
 
-  const materiasNotas =
-    session?.rol === "profesor"
-      ? materias.filter((materia) =>
-          asignacionesDocente.some(
-            (asignacion) =>
-              String(asignacion.id_curso) === String(notaCurso) &&
-              asignacion.codigo_materia === materia.codigo,
-          ),
-        )
-      : materias;
+  const cursoNotaSeleccionado = cursos.find(
+    (curso) => String(curso.id_curso) === String(notaCurso),
+  );
+  const materiasNotas = materias.filter((materia) => {
+    const asignadaAlCurso = cursoNotaSeleccionado?.materias?.some(
+      (materiaCurso) => materiaCurso.codigo === materia.codigo,
+    );
+    const asignadaAlDocente =
+      session?.rol !== "profesor" ||
+      asignacionesDocente.some(
+        (asignacion) =>
+          String(asignacion.id_curso) === String(notaCurso) &&
+          asignacion.codigo_materia === materia.codigo,
+      );
+    return asignadaAlCurso && asignadaAlDocente;
+  });
 
   async function loadNotas() {
     if (!notaCurso) {
@@ -3281,6 +3287,14 @@ function PersonalAdminPage({
   async function save(event) {
     event.preventDefault();
     const isNew = modal.mode === "new";
+    if (
+      resource === "administradores" &&
+      String(modal.person?.dni) === String(currentAdminDni) &&
+      form.estado === "Baja"
+    ) {
+      pushToast("No podés ponerte en Baja a vos mismo", "warn");
+      return;
+    }
     const body = {
       ...form,
       cargo: includeCargo ? form.cargo || null : undefined,
@@ -3357,7 +3371,15 @@ function PersonalAdminPage({
               >
                 <option value="">Todos los estados</option>
                 <option value="Activo">Activo</option>
-                <option value="Baja">Baja</option>
+                <option
+                  value="Baja"
+                  disabled={
+                    resource === "administradores" &&
+                    String(modal.person?.dni) === String(currentAdminDni)
+                  }
+                >
+                  Baja
+                </option>
               </select>
             </div>
             <div className="table-wrap">
