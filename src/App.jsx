@@ -689,16 +689,20 @@ function App() {
   async function deleteMateria(materia) {
     if (
       !window.confirm(
-        `¿Quitar ${materia.nombre} del ciclo actual? No se puede quitar si tiene cursos, profesores o notas asignadas. La materia seguirá disponible en el catálogo global.`,
+        `¿Quitar ${materia.nombre} del ciclo actual? No se puede quitar si tiene cursos, profesores o notas asignadas. Si no está asignada a otros ciclos, también se eliminará del catálogo global.`,
       )
     )
       return;
     try {
-      await apiFetch(`/materias/${encodeURIComponent(materia.codigo)}`, {
+      const result = await apiFetch(`/materias/${encodeURIComponent(materia.codigo)}`, {
         method: "DELETE",
       });
       setModalMateria(null);
-      pushToast("Materia quitada del ciclo lectivo");
+      pushToast(
+        result.eliminada
+          ? "Materia eliminada del catálogo"
+          : "Materia quitada del ciclo lectivo",
+      );
       await loadCoreData();
     } catch (error) {
       pushToast(error.message, "warn");
@@ -1246,7 +1250,7 @@ function App() {
             </div>
           )}
           {loading && (
-            <div className="loading-line">Sincronizando con PostgreSQL…</div>
+            <div className="loading-line">Cargando...</div>
           )}
 
           {page === "dashboard" && ["admin"].includes(session?.rol) && (

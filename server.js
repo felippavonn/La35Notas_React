@@ -2378,10 +2378,18 @@ app.delete("/api/materias/:codigo", auth, roles("admin"), async (req, res) => {
       return fail(res, 400, "No hay un ciclo lectivo seleccionado");
     }
     const subjectResult = await client.query(
+      "SELECT codigo FROM materia WHERE codigo=$1 FOR UPDATE",
+      [codigo],
+    );
+    if (!subjectResult.rows[0]) {
+      await client.query("ROLLBACK");
+      return fail(res, 404, "Materia no encontrada");
+    }
+    const assignmentResult = await client.query(
       "SELECT codigo_materia FROM ciclo_materia WHERE codigo_materia=$1 AND id_ciclo_lectivo=$2 FOR UPDATE",
       [codigo, cycleId],
     );
-    if (!subjectResult.rows[0]) {
+    if (!assignmentResult.rows[0]) {
       await client.query("ROLLBACK");
       return fail(res, 404, "Materia no encontrada");
     }
@@ -2415,8 +2423,16 @@ app.delete("/api/materias/:codigo", auth, roles("admin"), async (req, res) => {
       "DELETE FROM ciclo_materia WHERE codigo_materia=$1 AND id_ciclo_lectivo=$2",
       [codigo, cycleId],
     );
+    const remainingAssignments = await client.query(
+      "SELECT 1 FROM ciclo_materia WHERE codigo_materia=$1 LIMIT 1",
+      [codigo],
+    );
+    const eliminada = remainingAssignments.rowCount === 0;
+    if (eliminada) {
+      await client.query("DELETE FROM materia WHERE codigo=$1", [codigo]);
+    }
     await client.query("COMMIT");
-    res.json({ ok: true });
+    res.json({ ok: true, eliminada });
   } catch (error) {
     await client.query("ROLLBACK");
     if (error.code === "23503") {
