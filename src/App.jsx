@@ -3371,15 +3371,7 @@ function PersonalAdminPage({
               >
                 <option value="">Todos los estados</option>
                 <option value="Activo">Activo</option>
-                <option
-                  value="Baja"
-                  disabled={
-                    resource === "administradores" &&
-                    String(modal.person?.dni) === String(currentAdminDni)
-                  }
-                >
-                  Baja
-                </option>
+                <option value="Baja">Baja</option>
               </select>
             </div>
             <div className="table-wrap">
@@ -3530,7 +3522,15 @@ function PersonalAdminPage({
                 }
               >
                 <option value="Activo">Activo</option>
-                <option value="Baja">Baja</option>
+                <option
+                  value="Baja"
+                  disabled={
+                    resource === "administradores" &&
+                    String(modal.person.dni) === String(currentAdminDni)
+                  }
+                >
+                  Baja
+                </option>
               </select>
             </div>
             {includeCargo && (
