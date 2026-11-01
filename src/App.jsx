@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import escudo from "./assets/escudo.png";
 import {
   apiFetch,
   clearSession,
@@ -68,6 +69,7 @@ function App() {
 
   const [alumnos, setAlumnos] = useState([]);
   const [docentes, setDocentes] = useState([]);
+  const [teacherStatusLoaded, setTeacherStatusLoaded] = useState(false);
   const [cursos, setCursos] = useState([]);
   const [turnos, setTurnos] = useState([]);
   const [ciclosLectivos, setCiclosLectivos] = useState([]);
@@ -155,9 +157,17 @@ function App() {
   const canManageTeachers =
     session?.rol === "admin" || session?.rol === "preceptor";
   const canManageCourses = session?.rol === "admin";
-  const canManageNotes = ["admin", "profesor", "preceptor"].includes(
-    session?.rol,
-  );
+  const isTeacherOnLeave =
+    session?.rol === "profesor" &&
+    docentes.some(
+      (docente) =>
+        String(docente.dni) === String(session.dni_profesor) &&
+        docente.estado === "Licencia",
+    );
+  const canManageNotes =
+    ["admin", "profesor", "preceptor"].includes(session?.rol) &&
+    (session?.rol !== "profesor" ||
+      (teacherStatusLoaded && !isTeacherOnLeave));
   const isViewingHistoricalCycle =
     session?.rol === "admin" &&
     ciclosLectivos.length > 0 &&
@@ -174,6 +184,7 @@ function App() {
 
   async function loadCoreData() {
     if (!session) return;
+    if (session.rol === "profesor") setTeacherStatusLoaded(false);
     setLoading(true);
     setGlobalError("");
     try {
@@ -226,6 +237,7 @@ function App() {
           apiFetch("/notificaciones"),
         ]);
         setDocentes(docentesData);
+        if (session.rol === "profesor") setTeacherStatusLoaded(true);
         setNotificaciones(notifData);
       } else {
         const [misBoletinesData, notifData] = await Promise.all([
@@ -261,6 +273,7 @@ function App() {
     setLoginError("");
     try {
       const user = await login(loginUser.trim(), loginPass);
+      setTeacherStatusLoaded(false);
       setSession(user);
       setPage(
         user.rol === "alumno"
@@ -283,6 +296,7 @@ function App() {
     try {
       await logout();
     } finally {
+      setTeacherStatusLoaded(false);
       setSession(null);
       setPage("dashboard");
     }
@@ -374,7 +388,7 @@ function App() {
   });
 
   async function loadNotas() {
-    if (!notaCurso) {
+    if (!notaCurso || !canManageNotes) {
       setNotas([]);
       return;
     }
@@ -389,9 +403,10 @@ function App() {
   }
 
   useEffect(() => {
-    if (page === "notas" && notaCurso) loadNotas();
+    if (page === "notas" && notaCurso && canManageNotes) loadNotas();
+    else if (!canManageNotes) setNotas([]);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [page, notaCurso, selectedCycleYear]);
+  }, [page, notaCurso, selectedCycleYear, canManageNotes]);
 
   function selectCycle(year) {
     if (session?.rol !== "admin") return;
@@ -478,6 +493,7 @@ function App() {
       email: "",
       telefono: "",
       estado: "Activo",
+      suplente_dni: "",
       asignaciones: [],
     });
     setModalDocente({ mode: "new" });
@@ -491,10 +507,16 @@ function App() {
       email: docente.email || "",
       telefono: docente.telefono || "",
       estado: docente.estado || "Activo",
-      asignaciones: (docente.asignaciones || []).map((assignment) => ({
-        codigo_materia: assignment.codigo_materia,
-        cursos: assignment.cursos.map((curso) => String(curso.id_curso)),
-      })),
+      suplente_dni: docente.dni_suplente || "",
+      asignaciones:
+        docente.estado === "Suplente"
+          ? []
+          : (docente.asignaciones || []).map((assignment) => ({
+              codigo_materia: assignment.codigo_materia,
+              cursos: assignment.cursos.map((curso) =>
+                String(curso.id_curso),
+              ),
+            })),
     });
     setModalDocente({ mode: "edit", docente });
   }
@@ -545,6 +567,14 @@ function App() {
             apellido: docenteForm.apellido.trim(),
             email: docenteForm.email.trim() || null,
             telefono: docenteForm.telefono.trim() || null,
+            asignaciones:
+              docenteForm.estado === "Suplente"
+                ? []
+                : docenteForm.asignaciones,
+            suplente_dni:
+              docenteForm.estado === "Licencia"
+                ? docenteForm.suplente_dni
+                : null,
           }),
         },
       );
@@ -1048,8 +1078,11 @@ function App() {
     return (
       <div id="login-screen">
         <form className="login-card" onSubmit={handleLogin}>
-          <div className="login-logo">
-            la35<span>Notas</span>
+          <div className="brand-lockup login-brand">
+            <img className="brand-crest" src={escudo} alt="Escudo" />
+            <div className="login-logo">
+              la35<span>Notas</span>
+            </div>
           </div>
           <div className="login-sub">Sistema de Gestión de Calificaciones</div>
 
@@ -1160,39 +1193,54 @@ function App() {
       />
 
       <aside className={`sidebar ${sidebarOpen ? "open" : ""}`}>
-        <div className="sidebar-logo">
-          la35<span>Notas</span>
+        <div className="sidebar-logo brand-lockup">
+          <img className="brand-crest" src={escudo} alt="Escudo" />
+          <span className="sidebar-brand-name">
+            la35<span>Notas</span>
+          </span>
         </div>
-        {visibleNav.map((item) =>
-          item.type === "spacer" ? (
-            <div
-              key={item.id}
-              className="sidebar-nav-spacer"
-              aria-hidden="true"
-            />
-          ) : (
-            <div
-              key={item.id}
-              className={`nav-item ${page === item.id ? "active" : ""}`}
-              onClick={() => navigate(item.id)}
-            >
-              <span className="nav-icon">{item.icon}</span>
-              {item.label}
-            </div>
-          ),
-        )}
-        <div className="sidebar-bottom">
-          <div className="user-chip">
-            <div className="user-avatar">
-              {session.nombre?.[0]?.toUpperCase() || "U"}
-            </div>
-            <div className="user-info">
-              <div className="user-name">{session.nombre}</div>
-              <div className="user-role">
-                {ROLE_LABELS[session.rol] || session.rol}
+        <nav className="sidebar-nav" aria-label="Secciones">
+          {visibleNav.map((item) =>
+            item.type === "spacer" ? (
+              <div
+                key={item.id}
+                className="sidebar-nav-spacer"
+                aria-hidden="true"
+              />
+            ) : (
+              <div
+                key={item.id}
+                className={`nav-item ${page === item.id ? "active" : ""}`}
+                onClick={() => navigate(item.id)}
+              >
+                <span className="nav-icon">{item.icon}</span>
+                {item.label}
               </div>
+            ),
+          )}
+        </nav>
+        <div className="sidebar-bottom">
+          <details className="account-menu">
+            <summary className="user-chip">
+              <div className="user-avatar">
+                {session.nombre?.[0]?.toUpperCase() || "U"}
+              </div>
+              <div className="user-info">
+                <div className="user-name">{session.nombre}</div>
+                <div className="user-role">
+                  {ROLE_LABELS[session.rol] || session.rol}
+                </div>
+              </div>
+            </summary>
+            <div className="account-dropdown">
+              <button
+                className="btn btn-ghost btn-sm account-logout"
+                onClick={handleLogout}
+              >
+                Salir
+              </button>
             </div>
-          </div>
+          </details>
         </div>
       </aside>
 
@@ -1236,9 +1284,6 @@ function App() {
                 <strong>{selectedCycleYear || "—"}</strong>
               </div>
             )}
-            <button className="btn btn-ghost btn-sm" onClick={handleLogout}>
-              Salir
-            </button>
           </div>
         </div>
 
@@ -1360,6 +1405,12 @@ function App() {
                 openIndividualNotesModal={openIndividualNotesModal}
               />
             )}
+          {page === "notas" && isTeacherOnLeave && (
+            <div className="card leave-notice" role="status">
+              Estás en licencia. No podés cargar ni modificar calificaciones
+              hasta que tu estado vuelva a Activo.
+            </div>
+          )}
 
           {page === "consulta" && (
             <ConsultaPage
@@ -1391,9 +1442,6 @@ function App() {
           <form className="modal" onSubmit={saveAlumno}>
             <div className="modal-title">
               {modalAlumno.mode === "new" ? "Nuevo alumno" : "Editar alumno"}
-            </div>
-            <div className="modal-sub">
-              Los cambios se guardan en PostgreSQL.
             </div>
             <div className="field">
               <label>DNI</label>
@@ -1620,31 +1668,122 @@ function App() {
                     ...docenteForm,
                     estado: event.target.value,
                     asignaciones:
-                      event.target.value === "Baja"
+                      ["Baja", "Suplente"].includes(event.target.value)
                         ? []
                         : docenteForm.asignaciones,
                   })
                 }
               >
-                {["Activo", "Baja"].map((estado) => (
+                {["Activo", "Licencia", "Suplente", "Baja"].map((estado) => (
                   <option key={estado}>{estado}</option>
                 ))}
               </select>
             </div>
 
-            <div className="teacher-assignments-header">
-              <strong>Materias y cursos asignados</strong>
-              {docenteForm.estado !== "Baja" && (
-                <button
-                  type="button"
-                  className="btn btn-ghost btn-sm"
-                  onClick={addDocenteAssignment}
+            {docenteForm.estado === "Licencia" && (
+              <div className="field">
+                <label htmlFor="teacher-substitute">Suplente</label>
+                <select
+                  id="teacher-substitute"
+                  value={docenteForm.suplente_dni}
+                  onChange={(event) =>
+                    setDocenteForm({
+                      ...docenteForm,
+                      suplente_dni: event.target.value,
+                    })
+                  }
+                  required
                 >
-                  + Agregar materia
-                </button>
-              )}
-            </div>
-            {docenteForm.asignaciones.map((assignment, index) => {
+                  <option value="">Seleccioná un suplente</option>
+                  {docentes
+                    .filter(
+                      (docente) =>
+                        docente.estado === "Suplente" &&
+                        String(docente.dni) !== String(docenteForm.dni),
+                    )
+                    .map((docente) => (
+                      <option key={docente.dni} value={docente.dni}>
+                        {docente.apellido}, {docente.nombre} ({docente.dni})
+                      </option>
+                    ))}
+                </select>
+                {!docentes.some(
+                  (docente) =>
+                    docente.estado === "Suplente" &&
+                    String(docente.dni) !== String(docenteForm.dni),
+                ) && (
+                  <small className="muted-text">
+                    No hay docentes con estado Suplente disponibles.
+                  </small>
+                )}
+                <small className="muted-text">
+                  El suplente recibirá las materias y cursos asignados a este
+                  docente.
+                </small>
+              </div>
+            )}
+
+            {docenteForm.estado === "Suplente" ? (
+              <div className="teacher-assignments">
+                <div className="teacher-assignments-header">
+                  <strong>Asignaciones de docentes con licencia</strong>
+                </div>
+                {docentes
+                  .filter(
+                    (docente) =>
+                      docente.estado === "Licencia" &&
+                      String(docente.dni_suplente) ===
+                        String(docenteForm.dni),
+                  )
+                  .map((titular) => (
+                    <div className="teacher-assignment" key={titular.dni}>
+                      <strong>
+                        {titular.apellido}, {titular.nombre}
+                      </strong>
+                      {(titular.asignaciones || []).map((assignment) => (
+                        <div
+                          className="muted-text"
+                          key={assignment.codigo_materia}
+                        >
+                          {assignment.nombre}:{" "}
+                          {assignment.cursos
+                            .map((curso) => curso.label)
+                            .join(", ") || "Sin cursos asignados"}
+                        </div>
+                      ))}
+                      {!titular.asignaciones?.length && (
+                        <div className="muted-text">
+                          No tiene asignaciones en este ciclo lectivo.
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                {!docentes.some(
+                  (docente) =>
+                    docente.estado === "Licencia" &&
+                    String(docente.dni_suplente) ===
+                      String(docenteForm.dni),
+                ) && (
+                  <div className="empty-state">
+                    Este suplente no tiene docentes en licencia asignados.
+                  </div>
+                )}
+              </div>
+            ) : (
+              <>
+                <div className="teacher-assignments-header">
+                  <strong>Materias y cursos asignados</strong>
+                  {docenteForm.estado !== "Baja" && (
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-sm"
+                      onClick={addDocenteAssignment}
+                    >
+                      + Agregar materia
+                    </button>
+                  )}
+                </div>
+                {docenteForm.asignaciones.map((assignment, index) => {
               const usedByOthers = new Set(
                 docenteForm.asignaciones
                   .filter((_item, assignmentIndex) => assignmentIndex !== index)
@@ -1742,13 +1881,15 @@ function App() {
                   </div>
                 </div>
               );
-            })}
-            {!docenteForm.asignaciones.length && (
-              <div className="empty-state">
-                {docenteForm.estado === "Baja"
-                  ? "Al guardar, el docente quedará sin materias ni cursos asignados."
-                  : "Todavía no hay materias ni cursos asignados."}
-              </div>
+                })}
+                {!docenteForm.asignaciones.length && (
+                  <div className="empty-state">
+                    {docenteForm.estado === "Baja"
+                      ? "Al guardar, el docente quedará sin materias ni cursos asignados."
+                      : "Todavía no hay materias ni cursos asignados."}
+                  </div>
+                )}
+              </>
             )}
 
             <div className="modal-footer">
@@ -2453,7 +2594,11 @@ function DashboardPage({ dashboard, alumnos, notificaciones, cursos }) {
             <span
               className={`badge ${item.tipo === "Crítica" ? "badge-warn" : "badge-ok"}`}
             >
-              {item.tipo}
+              {item.tipo === "Crítica"
+                ? "Desaprobado"
+                : item.tipo === "Informe"
+                  ? "Aprobado"
+                  : item.tipo}
             </span>
             <span className="stat-sub">
               {item.fecha
@@ -2758,7 +2903,7 @@ function DocentesPage({
             }}
           >
             <option value="">Todos los estados</option>
-            {["Activo", "Baja"].map((estado) => (
+            {["Activo", "Licencia", "Suplente", "Baja"].map((estado) => (
               <option key={estado} value={estado}>
                 {estado}
               </option>
@@ -2791,7 +2936,7 @@ function DocentesPage({
                   <td>{docente.cursos || "—"}</td>
                   <td>
                     <span
-                      className={`badge ${docente.estado === "Activo" ? "badge-ok" : docente.estado === "Baja" ? "badge-warn" : "badge-blue"}`}
+                      className={`badge ${docente.estado === "Activo" ? "badge-ok" : docente.estado === "Baja" || docente.estado === "Licencia" ? "badge-warn" : "badge-blue"}`}
                     >
                       {docente.estado || "Activo"}
                     </span>

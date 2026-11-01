@@ -929,11 +929,20 @@ app.get("/api/docentes", auth, async (req, res) => {
     const { rows } = await pool.query(
       `
       SELECT p.dni, p.nombre, p.apellido, p.email, p.telefono, p.estado,
+             p.dni_suplente,
              COALESCE((
                SELECT string_agg(DISTINCT m.nombre, ', ')
                FROM profesor_materia pm
                JOIN materia m ON m.codigo=pm.codigo_materia
-               WHERE pm.dni_profesor=p.dni
+               JOIN profesor titular ON titular.dni=pm.dni_profesor
+               WHERE (
+                   (titular.dni=p.dni AND titular.estado IN ('Activo', 'Licencia'))
+                   OR (
+                     p.estado='Suplente'
+                     AND titular.dni_suplente=p.dni
+                     AND titular.estado='Licencia'
+                   )
+                 )
                  AND pm.id_ciclo_lectivo=(SELECT id_ciclo_lectivo FROM ciclo_lectivo WHERE anio=COALESCE($1::integer, (SELECT MAX(anio) FROM ciclo_lectivo)) ORDER BY anio DESC LIMIT 1)
              ), '') AS materias,
              COALESCE(
@@ -968,13 +977,21 @@ app.get("/api/docentes", auth, async (req, res) => {
                           FILTER (WHERE c2.id_curso IS NOT NULL), '[]'::json) AS cursos
                  FROM profesor_materia pm
                  JOIN materia materia ON materia.codigo=pm.codigo_materia
+                 JOIN profesor titular ON titular.dni=pm.dni_profesor
                  LEFT JOIN profesor_curso_materia pcm ON pcm.dni_profesor=pm.dni_profesor
                    AND pcm.codigo_materia=pm.codigo_materia
                    AND pcm.id_ciclo_lectivo=pm.id_ciclo_lectivo
                  LEFT JOIN curso c2 ON c2.id_curso=pcm.id_curso
                    AND c2.id_ciclo_lectivo=pcm.id_ciclo_lectivo
                  LEFT JOIN especialidad e2 ON e2.id_especialidad=c2.id_especialidad
-                 WHERE pm.dni_profesor=p.dni
+                 WHERE (
+                     (titular.dni=p.dni AND titular.estado IN ('Activo', 'Licencia'))
+                     OR (
+                       p.estado='Suplente'
+                       AND titular.dni_suplente=p.dni
+                       AND titular.estado='Licencia'
+                     )
+                   )
                    AND pm.id_ciclo_lectivo=(
                      SELECT id_ciclo_lectivo FROM ciclo_lectivo WHERE anio=COALESCE($1::integer, (SELECT MAX(anio) FROM ciclo_lectivo)) ORDER BY anio DESC LIMIT 1
                    )
@@ -982,7 +999,19 @@ app.get("/api/docentes", auth, async (req, res) => {
                ) por_materia
              ), '[]'::json) AS asignaciones
       FROM profesor p
-      LEFT JOIN profesor_curso_materia pcm ON pcm.dni_profesor=p.dni
+      LEFT JOIN profesor_curso_materia pcm ON EXISTS (
+          SELECT 1
+          FROM profesor titular
+          WHERE titular.dni=pcm.dni_profesor
+            AND (
+              (titular.dni=p.dni AND titular.estado IN ('Activo', 'Licencia'))
+              OR (
+                p.estado='Suplente'
+                AND titular.dni_suplente=p.dni
+                AND titular.estado='Licencia'
+              )
+            )
+        )
         AND pcm.id_ciclo_lectivo=(
           SELECT id_ciclo_lectivo FROM ciclo_lectivo WHERE anio=COALESCE($1::integer, (SELECT MAX(anio) FROM ciclo_lectivo)) ORDER BY anio DESC LIMIT 1
         )
@@ -1000,7 +1029,7 @@ app.get("/api/docentes", auth, async (req, res) => {
   }
 });
 
-const ESTADOS_DOCENTE = new Set(["Activo", "Baja"]);
+const ESTADOS_DOCENTE = new Set(["Activo", "Licencia", "Suplente", "Baja"]);
 
 function validateDocente(body) {
   if (!body || !/^\d{1,20}$/.test(String(body.dni || "")))
@@ -1020,6 +1049,14 @@ function validateDocente(body) {
   if (!ESTADOS_DOCENTE.has(body.estado))
     return "El estado del docente no es válido";
   if (
+    body.estado === "Licencia" &&
+    (!/^\d{1,20}$/.test(String(body.suplente_dni || "")) ||
+      String(body.suplente_dni) === String(body.dni))
+  )
+    return "Seleccioná un docente suplente válido";
+  if (body.estado !== "Licencia" && body.suplente_dni != null)
+    return "El suplente solo se puede asignar a un docente con licencia";
+  if (
     body.email != null &&
     (typeof body.email !== "string" || body.email.length > 150)
   )
@@ -1031,6 +1068,8 @@ function validateDocente(body) {
     return "El teléfono del docente no es válido";
   if (!Array.isArray(body.asignaciones))
     return "Las asignaciones del docente no son válidas";
+  if (body.estado === "Suplente" && body.asignaciones.length)
+    return "Los suplentes heredan las asignaciones del docente en licencia";
   const subjectCodes = new Set();
   for (const assignment of body.asignaciones) {
     if (
@@ -1050,6 +1089,16 @@ function validateDocente(body) {
     }
   }
   return null;
+}
+
+async function validateTeacherSubstitute(client, body) {
+  if (body.estado !== "Licencia") return;
+  const { rows } = await client.query(
+    "SELECT dni FROM profesor WHERE dni=$1 AND estado='Suplente'",
+    [body.suplente_dni],
+  );
+  if (!rows[0])
+    throw new Error("El docente seleccionado no tiene estado Suplente");
 }
 
 async function replaceTeacherAssignments(client, dni, assignments, cycleId) {
@@ -1145,12 +1194,21 @@ app.post(
       await client.query("BEGIN");
       const cycleId = await getCycleId(client, requestedCycleYear(req));
       if (!cycleId) throw new Error("No hay un ciclo lectivo seleccionado");
-      const { dni, nombre, apellido, email, telefono, estado, asignaciones } =
-        req.body;
+      const {
+        dni,
+        nombre,
+        apellido,
+        email,
+        telefono,
+        estado,
+        asignaciones,
+        suplente_dni,
+      } = req.body;
+      await validateTeacherSubstitute(client, req.body);
       await client.query(
         `
-      INSERT INTO profesor (dni,nombre,apellido,email,telefono,estado)
-      VALUES ($1,$2,$3,$4,$5,$6)
+      INSERT INTO profesor (dni,nombre,apellido,email,telefono,estado,dni_suplente)
+      VALUES ($1,$2,$3,$4,$5,$6,$7)
     `,
         [
           dni,
@@ -1159,14 +1217,15 @@ app.post(
           email?.trim() || null,
           telefono?.trim() || null,
           estado,
+          estado === "Licencia" ? suplente_dni : null,
         ],
       );
-      if (estado === "Activo")
+      if (estado !== "Baja")
         await ensurePersonAccount(client, dni, "profesor", "dni_profesor");
       await replaceTeacherAssignments(
         client,
         dni,
-        estado === "Baja" ? [] : asignaciones,
+        ["Baja", "Suplente"].includes(estado) ? [] : asignaciones,
         cycleId,
       );
       await client.query("COMMIT");
@@ -1199,10 +1258,22 @@ app.put(
       await client.query("BEGIN");
       const cycleId = await getCycleId(client, requestedCycleYear(req));
       if (!cycleId) throw new Error("No hay un ciclo lectivo seleccionado");
+      await validateTeacherSubstitute(client, req.body);
+      if (req.body.estado !== "Suplente") {
+        const { rows: assignedSubstitute } = await client.query(
+          "SELECT dni FROM profesor WHERE dni_suplente=$1 AND estado='Licencia' AND dni<>$1 LIMIT 1",
+          [dni],
+        );
+        if (assignedSubstitute[0])
+          throw new Error(
+            "No se puede cambiar el estado mientras haya docentes en licencia que dependan de este suplente",
+          );
+      }
       const { rows } = await client.query(
         `
       UPDATE profesor
-      SET nombre=$2, apellido=$3, email=$4, telefono=$5, estado=$6
+      SET nombre=$2, apellido=$3, email=$4, telefono=$5, estado=$6,
+          dni_suplente=$7
       WHERE dni=$1
       RETURNING dni
     `,
@@ -1213,6 +1284,7 @@ app.put(
           req.body.email?.trim() || null,
           req.body.telefono?.trim() || null,
           req.body.estado,
+          req.body.estado === "Licencia" ? req.body.suplente_dni : null,
         ],
       );
       if (!rows[0]) {
@@ -1222,7 +1294,9 @@ app.put(
       await replaceTeacherAssignments(
         client,
         dni,
-        req.body.estado === "Baja" ? [] : req.body.asignaciones,
+        ["Baja", "Suplente"].includes(req.body.estado)
+          ? []
+          : req.body.asignaciones,
         cycleId,
       );
       const account = await syncPersonAccount(
@@ -1230,7 +1304,7 @@ app.put(
         dni,
         "profesor",
         "dni_profesor",
-        req.body.estado === "Activo",
+        req.body.estado !== "Baja",
       );
       if (!account.isActive) disabledAccountId = account.userId;
       await client.query("COMMIT");
@@ -1269,10 +1343,19 @@ app.delete(
         EXISTS(SELECT 1 FROM profesor_curso_materia WHERE dni_profesor=$1) AS tiene_asignaciones,
         EXISTS(SELECT 1 FROM profesor_materia WHERE dni_profesor=$1) AS tiene_materias,
         EXISTS(SELECT 1 FROM nota WHERE dni_profesor=$1) AS tiene_notas,
-        EXISTS(SELECT 1 FROM nota_individual WHERE dni_profesor=$1) AS tiene_notas_individuales
+        EXISTS(SELECT 1 FROM nota_individual WHERE dni_profesor=$1) AS tiene_notas_individuales,
+        EXISTS(SELECT 1 FROM profesor WHERE dni_suplente=$1 AND estado='Licencia') AS es_suplente_activo
     `,
         [dni],
       );
+      if (rows[0].es_suplente_activo) {
+        await client.query("ROLLBACK");
+        return fail(
+          res,
+          409,
+          "No se puede eliminar un suplente mientras haya docentes en licencia que dependan de él",
+        );
+      }
       if (Object.values(rows[0]).some(Boolean)) {
         await client.query("ROLLBACK");
         return fail(
@@ -1639,17 +1722,31 @@ app.get(
     if (!req.user.dni_profesor)
       return fail(res, 403, "El usuario no tiene un docente asignado");
     try {
+      const { rows: teacherRows } = await pool.query(
+        "SELECT estado FROM profesor WHERE dni=$1",
+        [req.user.dni_profesor],
+      );
+      if (!teacherRows[0] || teacherRows[0].estado === "Licencia")
+        return res.json([]);
       const cycleId = await getCycleId(pool, requestedCycleYear(req));
       if (!cycleId) return res.json([]);
       const { rows } = await pool.query(
         `
       SELECT DISTINCT pcm.id_curso, pcm.codigo_materia
       FROM profesor_curso_materia pcm
-      WHERE pcm.dni_profesor=$1
+      JOIN profesor titular ON titular.dni=pcm.dni_profesor
+      WHERE (
+          (titular.dni=$1 AND titular.estado='Activo')
+          OR (
+            titular.dni_suplente=$1
+            AND titular.estado='Licencia'
+            AND $3::varchar='Suplente'
+          )
+        )
         AND pcm.id_ciclo_lectivo=$2
       ORDER BY pcm.id_curso, pcm.codigo_materia
     `,
-        [req.user.dni_profesor, cycleId],
+        [req.user.dni_profesor, cycleId, teacherRows[0].estado],
       );
       res.json(rows);
     } catch (error) {
@@ -2469,11 +2566,30 @@ app.get("/api/notas", auth, async (req, res) => {
     if (req.user.rol === "profesor") {
       if (!req.user.dni_profesor)
         return fail(res, 403, "El usuario no tiene un docente asignado");
-      params.push(req.user.dni_profesor);
+      const { rows: teacherRows } = await pool.query(
+        "SELECT estado FROM profesor WHERE dni=$1",
+        [req.user.dni_profesor],
+      );
+      if (!teacherRows[0] || teacherRows[0].estado === "Licencia")
+        return fail(res, 403, "El docente está en licencia y no puede cargar notas");
+      const teacherParameter = params.length + 1;
+      params.push(req.user.dni_profesor, teacherRows[0].estado);
       where += ` AND EXISTS (
         SELECT 1
         FROM profesor_curso_materia pcm
-        WHERE pcm.dni_profesor=$${params.length}
+        JOIN profesor titular ON titular.dni=pcm.dni_profesor
+        WHERE (
+            (
+              titular.dni=$${teacherParameter}
+              AND titular.estado='Activo'
+              AND $${teacherParameter + 1}::varchar='Activo'
+            )
+            OR (
+              titular.dni_suplente=$${teacherParameter}
+              AND titular.estado='Licencia'
+              AND $${teacherParameter + 1}::varchar='Suplente'
+            )
+          )
           AND pcm.id_curso=ac.id_curso
           AND pcm.id_ciclo_lectivo=ac.id_ciclo_lectivo
           AND pcm.codigo_materia=n.codigo_materia
@@ -2579,25 +2695,19 @@ app.post(
         );
       }
       const { id_curso, id_ciclo_lectivo } = enrollment.rows[0];
-      if (req.user.rol === "profesor") {
-        const assignment = await pool.query(
-          `
-        SELECT 1
-        FROM profesor_curso_materia
-        WHERE dni_profesor=$1
-          AND id_curso=$2
-          AND id_ciclo_lectivo=$3
-          AND codigo_materia=$4
-      `,
-          [req.user.dni_profesor, id_curso, id_ciclo_lectivo, codigo_materia],
+      if (
+        req.user.rol === "profesor" &&
+        !(await canManageIndividualGrade(
+          req,
+          { id_curso, id_ciclo_lectivo },
+          codigo_materia,
+        ))
+      ) {
+        return fail(
+          res,
+          403,
+          "No tenés asignada esa materia para este curso o estás en licencia",
         );
-        if (!assignment.rows[0]) {
-          return fail(
-            res,
-            403,
-            "No tenés asignada esa materia para este curso",
-          );
-        }
       }
       const { rows } = await pool.query(
         `
@@ -2679,25 +2789,19 @@ app.delete(
       }
       const { id_curso, id_ciclo_lectivo } = enrollment.rows[0];
 
-      if (req.user.rol === "profesor") {
-        const assignment = await pool.query(
-          `
-        SELECT 1
-        FROM profesor_curso_materia
-        WHERE dni_profesor=$1
-          AND id_curso=$2
-          AND id_ciclo_lectivo=$3
-          AND codigo_materia=$4
-      `,
-          [req.user.dni_profesor, id_curso, id_ciclo_lectivo, codigo_materia],
+      if (
+        req.user.rol === "profesor" &&
+        !(await canManageIndividualGrade(
+          req,
+          { id_curso, id_ciclo_lectivo },
+          codigo_materia,
+        ))
+      ) {
+        return fail(
+          res,
+          403,
+          "No tenés asignada esa materia para este curso o estás en licencia",
         );
-        if (!assignment.rows[0]) {
-          return fail(
-            res,
-            403,
-            "No tenés asignada esa materia para este curso",
-          );
-        }
       }
 
       const { rows } = await pool.query(
@@ -2798,11 +2902,28 @@ async function canManageIndividualGrade(req, enrollment, codigoMateria) {
   const { rows } = await pool.query(
     `
     SELECT 1
-    FROM profesor_curso_materia
-    WHERE dni_profesor=$1
-      AND id_curso=$2
-      AND id_ciclo_lectivo=$3
-      AND codigo_materia=$4
+    FROM profesor docente
+    WHERE docente.dni=$1
+      AND EXISTS (
+        SELECT 1
+        FROM profesor_curso_materia pcm
+        JOIN profesor titular ON titular.dni=pcm.dni_profesor
+        WHERE (
+            (
+              docente.estado='Activo'
+              AND titular.dni=docente.dni
+              AND titular.estado='Activo'
+            )
+            OR (
+              docente.estado='Suplente'
+              AND titular.dni_suplente=docente.dni
+              AND titular.estado='Licencia'
+            )
+          )
+          AND pcm.id_curso=$2
+          AND pcm.id_ciclo_lectivo=$3
+          AND pcm.codigo_materia=$4
+      )
   `,
     [
       req.user.dni_profesor,

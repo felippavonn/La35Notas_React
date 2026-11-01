@@ -134,7 +134,8 @@ CREATE TABLE profesor (
   apellido VARCHAR(80) NOT NULL,
   email VARCHAR(150),
   telefono VARCHAR(30),
-  estado VARCHAR(20) NOT NULL DEFAULT 'Activo' CHECK (estado IN ('Activo', 'Baja')),
+  estado VARCHAR(20) NOT NULL DEFAULT 'Activo' CHECK (estado IN ('Activo', 'Licencia', 'Suplente', 'Baja')),
+  dni_suplente VARCHAR(20) REFERENCES profesor(dni) ON DELETE SET NULL,
   id_domicilio INTEGER REFERENCES domicilio(id_domicilio)
 );
 
