@@ -124,3 +124,7 @@ cuentas correspondientes y usa el DNI como contraseña inicial.
   `CORS_ORIGIN`. No ejecutes `scripts/init-db.cjs` en cada build.
 - **Cloudflare Pages:** usá `npm run build` y `dist` como directorio de salida.
   Configurá `VITE_API_URL` con la URL pública de la API terminada en `/api`.
+
+## Documentación
+
+Toda la documentación [aquí](https://docs.google.com/document/d/1YNk5Wdl-58kTK-WZ4SZtEhY0vVsbr6wP6rKi8fzUTl0/edit?usp=sharing)
