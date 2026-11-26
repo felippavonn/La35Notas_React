@@ -60,9 +60,10 @@ aplicación compilada.
    ```
 
 
-El esquema no contiene migraciones y no actualiza bases existentes. Antes de
-usar estos cambios en una instalación previa, realizá una copia de seguridad y
-prepará la migración correspondiente.
+Esta versión concentra la definición de base en `database/schema.sql`.
+El comando de inicialización requiere una base vacía. Para llevar datos de una
+instalación anterior, conservá una copia de seguridad y planificá la
+transferencia a la nueva estructura antes de desplegarla.
 
 ## Desarrollo local
 
@@ -102,6 +103,36 @@ npm run server
 - Interfaz con identidad visual roja, escudo institucional y navegación
   lateral desplazable. Los botones de acción conservan sus colores, excepto el
   botón de acceso del login.
+
+## Cambios de la entrevista 3
+
+- **Planes de estudio.** Administración puede crear, editar, duplicar y eliminar
+  planes sin cursos asociados. El Ciclo Básico abarca 1.º y 2.º y el Ciclo
+  Superior abarca 3.º a 6.º con Automotores o Computación. Motores es la misma
+  especialidad que Automotores.
+- **Materias y cursos.** Las materias se dan de alta con descripción, plan y
+  año. Una materia del catálogo se puede reutilizar en varios planes y años.
+  Cada curso guarda su división y plan para el ciclo lectivo seleccionado.
+  Las materias del curso deben pertenecer a su plan y año y cada código se
+  asigna una vez. La copia de ciclo conserva divisiones, planes, materias y
+  asignaciones de personal.
+- **Datos e historial del alumno.** La ficha admite domicilio, fecha de
+  nacimiento, género y nacionalidad. El historial muestra inscripciones
+  vigentes y cerradas, con notas generales y evaluaciones individuales. El
+  cambio de curso conserva las notas en su inscripción de origen. El PDF
+  incluye los cursos que figuran en el boletín del ciclo.
+- **Calificación definitiva.** Si se carga explícitamente, es la que aparece
+  en la última columna del boletín. Si se deja vacía, se toma la primera que
+  esté disponible entre Febrero, Diciembre y Final, en ese orden.
+- **Asignaciones de personal.** Los docentes actúan sobre sus combinaciones
+  de curso y materia, incluida la suplencia vigente. Los preceptores consultan
+  sus cursos y materias asignados en cada ciclo. Administración puede habilitar
+  acciones de edición y carga de notas desde **Preceptores → Permisos**.
+
+Tras inicializar la base, completá **Planes de estudio** con la grilla oficial
+y vinculá sus materias desde **Cursos**. Los planes iniciales tienen la grilla
+vacía. Para una nueva grilla a partir de otro ciclo, duplicá el plan y
+seleccioná la nueva versión en los cursos correspondientes.
 
 ## Cuentas de demostración
 

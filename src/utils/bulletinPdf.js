@@ -49,15 +49,22 @@ function gradeForPeriod(subject, period) {
 // --------------------------------------------------
 
 export async function createBulletinPdfDocument(student, cycle) {
-  const course = cycle.cursos?.[0];
-  const subjects = course?.materias || [];
-
   const pdf = new jsPDF({
     orientation: "landscape",
     unit: "mm",
     format: "a4",
   });
 
+  const courses = cycle.cursos?.length ? cycle.cursos : [null];
+  for (const [index, course] of courses.entries()) {
+    if (index > 0) pdf.addPage();
+    await renderCourseBulletin(pdf, student, cycle, course);
+  }
+  return pdf;
+}
+
+async function renderCourseBulletin(pdf, student, cycle, course) {
+  const subjects = course?.materias || [];
   const pageWidth = pdf.internal.pageSize.getWidth();
   const pageHeight = pdf.internal.pageSize.getHeight();
 
@@ -251,7 +258,7 @@ export async function createBulletinPdfDocument(student, cycle) {
 
   const studentInfo = [
     ["AÑO:", course?.anio == null ? "" : `${course.anio}°`],
-    ["DIVISIÓN:", course?.division == null ? "" : `${course.division}°`],
+    ["DIVISIÓN:", course?.division == null ? "" : `${course.division}`],
   ];
     
   if (Number(course?.anio) >= 3) {
@@ -318,7 +325,7 @@ export async function createBulletinPdfDocument(student, cycle) {
     "",
     "ASIGNATURA",
     ...periods.map(([, label]) => label),
-    "Calif. Def.",
+    "Calificación\ndefinitiva",
   ];
 
   const gradeRows = subjects.map((subject, index) => [
@@ -664,7 +671,6 @@ export async function createBulletinPdfDocument(student, cycle) {
     { align: "center" },
   );
 
-  return pdf;
 }
 
 // --------------------------------------------------

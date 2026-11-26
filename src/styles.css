@@ -1626,3 +1626,23 @@ button:disabled {
     min-width: 580px;
   }
 }
+
+.scope-fieldset {
+  border: 1px solid var(--border, #d8d8d8);
+  border-radius: 8px;
+  margin: 0 0 14px;
+  padding: 12px;
+  min-width: 0;
+}
+
+.scope-fieldset legend {
+  padding: 0 5px;
+  font-weight: 600;
+}
+
+.plan-subject-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}

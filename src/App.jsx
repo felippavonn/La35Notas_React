@@ -47,6 +47,17 @@ const BULLETIN_PERIODS = [
   ["FEBRERO", "Feb"],
 ];
 
+const planYears = (plan) => {
+  if (plan?.ciclo === "Básico") return [1, 2];
+  if (plan?.ciclo === "Superior") return [3, 4, 5, 6];
+  return [];
+};
+
+function courseLabel(course) {
+  const specialty = course.especialidad ? ` · ${course.especialidad}` : "";
+  return `${course.anio}.º ${course.division}${specialty}`;
+}
+
 function App() {
   const [session, setSession] = useState(getStoredUser());
   const [loginUser, setLoginUser] = useState("");
@@ -124,9 +135,12 @@ function App() {
   });
   const [nuevoCicloAnio, setNuevoCicloAnio] = useState("");
   const [nuevoCicloCopiarDesde, setNuevoCicloCopiarDesde] = useState("");
+  const [planes, setPlanes] = useState([]);
+  const [especialidades, setEspecialidades] = useState([]);
   const [cursoForm, setCursoForm] = useState({
     anio: "1",
-    especialidad: "",
+    division: "",
+    id_plan_estudio: "",
     turno_id: "",
     materias: [],
   });
@@ -140,6 +154,9 @@ function App() {
   nombre: "",
   apellido: "",
   email: "",
+  fecha_nacimiento: "",
+  genero: "",
+  nacionalidad: "",
   calle: "",
   numero_calle: "",
   departamento: "",
@@ -158,6 +175,7 @@ function App() {
     FINAL: "",
     DICIEMBRE: "",
     FEBRERO: "",
+    DEFINITIVA: "",
   });
   const [notificarNotaGeneral, setNotificarNotaGeneral] = useState(true);
 
@@ -166,9 +184,13 @@ function App() {
   const canManageStudents =
     session?.rol === "admin" ||
     preceptorPermissions.some((item) => item.startsWith("alumnos."));
+  const canEditStudentDetails = session?.rol === "admin" || preceptorPermissions.includes("alumnos.editar_datos");
+  const canEditStudentStatus = session?.rol === "admin" || preceptorPermissions.includes("alumnos.cambiar_estado");
+  const canChooseCycle = ["admin", "preceptor"].includes(session?.rol);
   const canManageTeachers =
     session?.rol === "admin" ||
     preceptorPermissions.some((item) => item.startsWith("docentes."));
+  const canAssignStudentCourse = session?.rol === "admin";
   const canManageCourses = session?.rol === "admin";
   const isTeacherOnLeave =
     session?.rol === "profesor" &&
@@ -179,8 +201,9 @@ function App() {
     );
   const canManageNotes =
     ["admin", "profesor", "preceptor"].includes(session?.rol) &&
-    (session?.rol !== "profesor" ||
-      (teacherStatusLoaded && !isTeacherOnLeave));
+    (session?.rol !== "profesor" || (teacherStatusLoaded && !isTeacherOnLeave)) &&
+    (session?.rol !== "preceptor" ||
+      (preceptorPermissions.includes("notas.editar") && asignacionesDocente.length > 0));
   const isViewingHistoricalCycle =
     session?.rol === "admin" &&
     ciclosLectivos.length > 0 &&
@@ -209,7 +232,7 @@ function App() {
       const ciclosData = await apiFetch("/ciclos-lectivos");
       const latestCycleYear = ciclosData[0]?.anio || null;
       const cycleYear =
-        session.rol === "admin" &&
+        canChooseCycle &&
         ciclosData.some(
           (ciclo) => Number(ciclo.anio) === Number(selectedCycleYear),
         )
@@ -228,6 +251,8 @@ function App() {
         materiasData,
         catalogoMateriasData,
         asignacionesData,
+        planesData,
+        especialidadesData,
       ] = await Promise.all([
         apiFetch("/dashboard"),
         apiFetch("/alumnos"),
@@ -239,7 +264,9 @@ function App() {
           : Promise.resolve([]),
         session.rol === "profesor"
           ? apiFetch("/docente-asignaciones")
-          : Promise.resolve([]),
+          : session.rol === "preceptor" ? apiFetch("/preceptor-asignaciones") : Promise.resolve([]),
+        session.rol === "admin" ? apiFetch("/planes-estudio") : Promise.resolve([]),
+        session.rol === "admin" ? apiFetch("/especialidades") : Promise.resolve([]),
       ]);
       setDashboard(dash);
       setAlumnos(alumnosData);
@@ -248,6 +275,8 @@ function App() {
       setMaterias(materiasData);
       setCatalogoMaterias(catalogoMateriasData);
       setAsignacionesDocente(asignacionesData);
+      setPlanes(planesData);
+      setEspecialidades(especialidadesData);
 
       if (!isAlumno) {
         const [docentesData, notifData] = await Promise.all([
@@ -324,12 +353,12 @@ function App() {
     if (session?.rol === "profesor" && nextPage !== "notas") return;
     if (
       session?.rol === "preceptor" &&
-      ["dashboard", "cursos", "notas", "notificaciones"].includes(nextPage)
+      ["dashboard", "cursos", "notificaciones"].includes(nextPage)
     )
       return;
     if (nextPage === "alumnos" && isAlumno) return;
     if (nextPage === "notas" && !canManageNotes) return;
-    if (nextPage === "materias" && session?.rol !== "admin") return;
+    if (["materias", "planes"].includes(nextPage) && session?.rol !== "admin") return;
     if (nextPage === "ciclos-lectivos" && session?.rol !== "admin") return;
     if (
       ["preceptores", "administradores"].includes(nextPage) &&
@@ -379,7 +408,7 @@ function App() {
   }, [alumnos, notas, notaCurso, notaMateria]);
 
   const cursosNotas =
-    session?.rol === "profesor"
+    session?.rol !== "admin"
       ? cursos.filter((curso) =>
           asignacionesDocente.some(
             (asignacion) =>
@@ -396,7 +425,7 @@ function App() {
       (materiaCurso) => materiaCurso.codigo === materia.codigo,
     );
     const asignadaAlDocente =
-      session?.rol !== "profesor" ||
+      session?.rol === "admin" ||
       asignacionesDocente.some(
         (asignacion) =>
           String(asignacion.id_curso) === String(notaCurso) &&
@@ -427,7 +456,7 @@ function App() {
   }, [page, notaCurso, selectedCycleYear, canManageNotes]);
 
   function selectCycle(year) {
-    if (session?.rol !== "admin") return;
+    if (!canChooseCycle) return;
     const nextYear = Number(year) || null;
     setActiveCycleYear(nextYear);
     setSelectedCycleYear(nextYear);
@@ -449,6 +478,9 @@ function App() {
     nombre: "",
     apellido: "",
     email: "",
+    fecha_nacimiento: "",
+    genero: "",
+    nacionalidad: "",
     calle: "",
     numero_calle: "",
     departamento: "",
@@ -469,6 +501,9 @@ function App() {
     nombre: alumno.nombre || "",
     apellido: alumno.apellido || "",
     email: alumno.email || "",
+    fecha_nacimiento: alumno.fecha_nacimiento || "",
+    genero: alumno.genero || "",
+    nacionalidad: alumno.nacionalidad || "",
     calle: alumno.calle || "",
     numero_calle: alumno.numero_calle || "",
     departamento: alumno.departamento || "",
@@ -487,6 +522,9 @@ function App() {
           nombre: newAlumno.nombre.trim(),
           apellido: newAlumno.apellido.trim(),
           email: newAlumno.email.trim() || null,
+          fecha_nacimiento: newAlumno.fecha_nacimiento || null,
+          genero: newAlumno.genero.trim() || null,
+          nacionalidad: newAlumno.nacionalidad.trim() || null,
           calle: newAlumno.calle.trim(),
           numero_calle: newAlumno.numero_calle.trim(),
           departamento: newAlumno.departamento.trim(),
@@ -658,10 +696,32 @@ function App() {
     }
   }
 
+  const eligibleCoursePlans = planes.filter((plan) => planYears(plan).includes(Number(cursoForm.anio)));
+  const selectedCoursePlan = eligibleCoursePlans.find(
+    (plan) => String(plan.id_plan_estudio) === cursoForm.id_plan_estudio,
+  );
+  const eligibleCourseSubjects = (selectedCoursePlan?.materias || []).filter(
+    (subject) => subject.anio === Number(cursoForm.anio),
+  );
+
+  function changeCourseCurriculum(year, planId) {
+    const plan = planes.find((item) => String(item.id_plan_estudio) === planId &&
+      planYears(item).includes(Number(year)));
+    const allowed = new Set((plan?.materias || [])
+      .filter((subject) => subject.anio === Number(year)).map((subject) => subject.codigo));
+    setCursoForm((current) => ({
+      ...current,
+      anio: year,
+      id_plan_estudio: plan ? planId : "",
+      materias: current.materias.filter((code) => allowed.has(code)),
+    }));
+  }
+
   function openNewCurso() {
     setCursoForm({
       anio: "1",
-      especialidad: "",
+      division: "",
+      id_plan_estudio: "",
       turno_id: "",
       materias: [],
     });
@@ -671,7 +731,8 @@ function App() {
   function openEditCurso(curso) {
     setCursoForm({
       anio: String(curso.anio),
-      especialidad: curso.especialidad,
+      division: curso.division,
+      id_plan_estudio: String(curso.id_plan_estudio),
       turno_id: curso.turno_id ? String(curso.turno_id) : "",
       materias: (curso.materias || []).map((materia) => materia.codigo),
     });
@@ -682,7 +743,8 @@ function App() {
     event.preventDefault();
     const body = {
       anio: Number(cursoForm.anio),
-      especialidad: Number(cursoForm.anio) <= 2 ? null : cursoForm.especialidad,
+      division: cursoForm.division.trim(),
+      id_plan_estudio: Number(cursoForm.id_plan_estudio),
       turno_id: cursoForm.turno_id || null,
       materias: cursoForm.materias,
     };
@@ -722,7 +784,7 @@ function App() {
   }
 
   function openNewMateria() {
-    setMateriaForm({ codigo: "", nombre: "", descripcion: "" });
+    setMateriaForm({ codigo: "", nombre: "", descripcion: "", id_plan_estudio: "", anio: "" });
     setModalMateria({ mode: "new" });
   }
 
@@ -742,7 +804,11 @@ function App() {
       nombre: materiaForm.nombre.trim(),
       descripcion: materiaForm.descripcion.trim(),
     };
-    if (isNew) body.codigo = materiaForm.codigo.trim().toUpperCase();
+    if (isNew) {
+      body.codigo = materiaForm.codigo.trim().toUpperCase();
+      body.id_plan_estudio = Number(materiaForm.id_plan_estudio);
+      body.anio = Number(materiaForm.anio);
+    }
 
     try {
       const saved = await apiFetch(
@@ -754,7 +820,7 @@ function App() {
       setModalMateria(null);
       pushToast(
         isNew && saved.reutilizada
-          ? `Se reutilizó ${saved.nombre} en todos los ciclos`
+          ? `Se vinculó ${saved.nombre} al plan y año elegidos`
           : isNew
             ? "Materia creada"
             : "Materia actualizada",
@@ -869,6 +935,7 @@ function App() {
       FINAL: calificaciones.FINAL ?? "",
       DICIEMBRE: calificaciones.DICIEMBRE ?? "",
       FEBRERO: calificaciones.FEBRERO ?? "",
+      DEFINITIVA: calificaciones.DEFINITIVA ?? "",
     });
     setNotificarNotaGeneral(true);
     setModalNota({ ...alumno, codigo_materia: notaMateria });
@@ -1047,14 +1114,6 @@ function App() {
       return;
     }
     try {
-      const gradesToSave = { ...notaForm };
-      if (!isFailedGrade(gradesToSave.FINAL)) {
-        gradesToSave.DICIEMBRE = "";
-        gradesToSave.FEBRERO = "";
-      } else if (!isFailedGrade(gradesToSave.DICIEMBRE)) {
-        gradesToSave.FEBRERO = "";
-      }
-
       const existingGrades = notas.filter(
         (row) =>
           row.dni === modalNota.dni &&
@@ -1066,7 +1125,7 @@ function App() {
       const existingGradesByType = new Map(
         existingGrades.map((row) => [row.tipo_evaluacion, row]),
       );
-      const gradeEntries = Object.entries(gradesToSave);
+      const gradeEntries = Object.entries(notaForm);
       const deleteCount = gradeEntries.filter(
         ([tipo_evaluacion, value]) =>
           value === "" && existingTypes.has(tipo_evaluacion),
@@ -1088,6 +1147,7 @@ function App() {
               method: "POST",
               body: JSON.stringify({
                 dni_alumno: modalNota.dni,
+                id_curso: Number(modalNota.id_curso),
                 codigo_materia: modalNota.codigo_materia,
                 tipo_evaluacion,
                 calificacion: Number(value),
@@ -1102,6 +1162,7 @@ function App() {
               method: "DELETE",
               body: JSON.stringify({
                 dni_alumno: modalNota.dni,
+                id_curso: Number(modalNota.id_curso),
                 codigo_materia: modalNota.codigo_materia,
                 tipo_evaluacion,
               }),
@@ -1195,6 +1256,7 @@ function App() {
     docentes: "Docentes",
     cursos: "Cursos y Divisiones",
     materias: "Gestión de Materias",
+    planes: "Planes de estudio",
     "ciclos-lectivos": "Ciclos Lectivos",
     notas: "Carga de Calificaciones",
     consulta: "Boletines",
@@ -1220,7 +1282,7 @@ function App() {
           ...(!isAlumno
             ? [{ id: "docentes", label: "Docentes", icon: "🏫" }]
             : []),
-          ...(canManageNotes && session?.rol !== "preceptor"
+          ...(canManageNotes
             ? [{ id: "notas", label: "Carga de Notas", icon: "✏️" }]
             : []),
           ...(session?.rol !== "preceptor" &&
@@ -1236,6 +1298,7 @@ function App() {
                 { id: "ciclos-lectivos", label: "Ciclos Lectivos", icon: "🗓️" },
                 { id: "cursos", label: "Cursos", icon: "📋" },
                 { id: "materias", label: "Materias", icon: "📚" },
+                { id: "planes", label: "Planes de estudio", icon: "🗂️" },
               ]
             : []),
         ];
@@ -1314,7 +1377,7 @@ function App() {
             <div className="topbar-title">{pageTitles[page]}</div>
           </div>
           <div className="topbar-right">
-            {session?.rol === "admin" ? (
+            {canChooseCycle ? (
               <label
                 className={`topbar-period ${isViewingHistoricalCycle ? "historical" : ""}`}
               >
@@ -1379,6 +1442,7 @@ function App() {
               filterEstado={filterEstado}
               setFilterEstado={setFilterEstado}
               canManageStudents={canManageStudents}
+              canAddStudent={canAssignStudentCourse}
               openNewAlumno={openNewAlumno}
               openEditAlumno={openEditAlumno}
             />
@@ -1390,6 +1454,7 @@ function App() {
               cursos={cursos}
               materias={materias}
               canManageTeachers={canManageTeachers}
+              canAddTeacher={canManageCourses}
               openNewDocente={openNewDocente}
               openEditDocente={openEditDocente}
             />
@@ -1413,10 +1478,21 @@ function App() {
               onAssignMateria={assignMateria}
             />
           )}
+          {page === "planes" && session?.rol === "admin" && (
+            <StudyPlansPage
+              planes={planes}
+              especialidades={especialidades}
+              catalogo={catalogoMaterias}
+              onChange={loadCoreData}
+              pushToast={pushToast}
+            />
+          )}
           {page === "preceptores" && session?.rol === "admin" && (
             <PersonalAdminPage
-              key="preceptores"
+              key={`preceptores-${selectedCycleYear}`}
               resource="preceptores"
+              cursos={cursos}
+              ciclo={selectedCycleYear}
               title="Preceptores"
               currentAdminDni={session?.dni_administrador}
               pushToast={pushToast}
@@ -1444,9 +1520,7 @@ function App() {
             />
           )}
 
-          {page === "notas" &&
-            canManageNotes &&
-            session?.rol !== "preceptor" && (
+          {page === "notas" && canManageNotes && (
               <NotasPage
                 cursos={cursosNotas}
                 materias={materiasNotas}
@@ -1506,6 +1580,7 @@ function App() {
               pattern="[0-9]{1,20}"
               maxLength={20}
               value={newAlumno.dni}
+              disabled={!canAssignStudentCourse}
               onChange={(e) =>
                 setNewAlumno({ ...newAlumno, dni: e.target.value })
               }
@@ -1516,6 +1591,7 @@ function App() {
               <label>Apellido</label>
               <input
                 value={newAlumno.apellido}
+                disabled={!canEditStudentDetails}
                 onChange={(e) =>
                   setNewAlumno({ ...newAlumno, apellido: e.target.value })
                 }
@@ -1526,6 +1602,7 @@ function App() {
               <label>Nombre</label>
               <input
                 value={newAlumno.nombre}
+                disabled={!canEditStudentDetails}
                 onChange={(e) =>
                   setNewAlumno({ ...newAlumno, nombre: e.target.value })
                 }
@@ -1537,10 +1614,29 @@ function App() {
               <input
                 type="email"
                 value={newAlumno.email}
+                disabled={!canEditStudentDetails}
                 onChange={(e) =>
                   setNewAlumno({ ...newAlumno, email: e.target.value })
                 }
               />
+            </div>
+            <div className="field">
+              <label htmlFor="alumno-nacimiento">Fecha de nacimiento</label>
+              <input id="alumno-nacimiento" type="date" disabled={!canEditStudentDetails}
+                value={newAlumno.fecha_nacimiento}
+                onChange={(event) => setNewAlumno({ ...newAlumno, fecha_nacimiento: event.target.value })} />
+            </div>
+            <div className="field">
+              <label htmlFor="alumno-genero">Género</label>
+              <input id="alumno-genero" maxLength={30} disabled={!canEditStudentDetails}
+                value={newAlumno.genero}
+                onChange={(event) => setNewAlumno({ ...newAlumno, genero: event.target.value })} />
+            </div>
+            <div className="field">
+              <label htmlFor="alumno-nacionalidad">Nacionalidad</label>
+              <input id="alumno-nacionalidad" maxLength={60} disabled={!canEditStudentDetails}
+                value={newAlumno.nacionalidad}
+                onChange={(event) => setNewAlumno({ ...newAlumno, nacionalidad: event.target.value })} />
             </div>
              <div className="modal-sub">Domicilio</div>
 
@@ -1550,6 +1646,7 @@ function App() {
                 id="alumno-calle"
                 type="text"
                 value={newAlumno.calle}
+                disabled={!canEditStudentDetails}
                 onChange={(e) =>
                   setNewAlumno({ ...newAlumno, calle: e.target.value })
                 }
@@ -1569,6 +1666,7 @@ function App() {
                 id="alumno-numero-calle"
                 type="text"
                 value={newAlumno.numero_calle}
+                disabled={!canEditStudentDetails}
                 onChange={(e) =>
                   setNewAlumno({ ...newAlumno, numero_calle: e.target.value })
                 }
@@ -1582,6 +1680,7 @@ function App() {
           id="alumno-departamento"
           type="text"
           value={newAlumno.departamento}
+                disabled={!canEditStudentDetails}
           onChange={(e) =>
             setNewAlumno({ ...newAlumno, departamento: e.target.value })
           }
@@ -1595,6 +1694,7 @@ function App() {
           id="alumno-localidad"
           type="text"
           value={newAlumno.localidad}
+                disabled={!canEditStudentDetails}
           onChange={(e) =>
             setNewAlumno({ ...newAlumno, localidad: e.target.value })
           }
@@ -1615,13 +1715,12 @@ function App() {
                 onChange={(e) =>
                   setNewAlumno({ ...newAlumno, id_curso: e.target.value })
                 }
-                disabled={newAlumno.estado !== "Activo"}
+                disabled={!canAssignStudentCourse || newAlumno.estado !== "Activo"}
               >
                 <option value="">Sin curso</option>
                 {cursos.map((curso) => (
                   <option key={curso.id_curso} value={curso.id_curso}>
-                    {curso.anio}° {curso.division}°
-                    {curso.especialidad && ` — ${curso.especialidad}`}
+                    {courseLabel(curso)}
                   </option>
                 ))}
               </select>
@@ -1630,6 +1729,7 @@ function App() {
               <label>Estado</label>
               <select
                 value={newAlumno.estado}
+                disabled={!canEditStudentStatus}
                 onChange={(e) =>
                   setNewAlumno({
                     ...newAlumno,
@@ -1646,7 +1746,7 @@ function App() {
             </div>
 
             <div className="modal-footer">
-              {modalAlumno.mode === "edit" && canManageStudents && (
+              {modalAlumno.mode === "edit" && canAssignStudentCourse && (
                 <button
                   type="button"
                   className="btn btn-danger"
@@ -1990,8 +2090,7 @@ function App() {
                             }
                           />
                           <span>
-                            {curso.anio}° {curso.division}
-                            {curso.especialidad && ` — ${curso.especialidad}`}
+                            {courseLabel(curso)}
                           </span>
                         </label>
                       );
@@ -2057,17 +2156,7 @@ function App() {
               <select
                 id="course-year"
                 value={cursoForm.anio}
-                onChange={(event) => {
-                  const anio = event.target.value;
-                  setCursoForm((current) => ({
-                    ...current,
-                    anio,
-                    especialidad:
-                      Number(anio) <= 2
-                        ? ""
-                        : current.especialidad || "Automotores",
-                  }));
-                }}
+                onChange={(event) => changeCourseCurriculum(event.target.value, cursoForm.id_plan_estudio)}
               >
                 {[1, 2, 3, 4, 5, 6].map((anio) => (
                   <option key={anio} value={anio}>
@@ -2076,24 +2165,33 @@ function App() {
                 ))}
               </select>
             </div>
-            {Number(cursoForm.anio) >= 3 && (
-              <div className="field">
-                <label htmlFor="course-specialty">Especialidad</label>
-                <select
-                  id="course-specialty"
-                  value={cursoForm.especialidad}
-                  onChange={(event) =>
-                    setCursoForm({
-                      ...cursoForm,
-                      especialidad: event.target.value,
-                    })
-                  }
-                >
-                  <option value="Automotores">Automotores</option>
-                  <option value="Computación">Computación</option>
-                </select>
-              </div>
-            )}
+            <div className="field">
+              <label htmlFor="course-division">División</label>
+              <input
+                id="course-division"
+                maxLength={10}
+                pattern="[A-Za-z0-9]{1,10}"
+                required
+                value={cursoForm.division}
+                onChange={(event) => setCursoForm({ ...cursoForm, division: event.target.value })}
+              />
+            </div>
+            <div className="field">
+              <label htmlFor="course-plan">Plan de estudio</label>
+              <select
+                id="course-plan"
+                required
+                value={cursoForm.id_plan_estudio}
+                onChange={(event) => changeCourseCurriculum(cursoForm.anio, event.target.value)}
+              >
+                <option value="">Seleccioná un plan</option>
+                {eligibleCoursePlans.map((plan) => (
+                  <option key={plan.id_plan_estudio} value={plan.id_plan_estudio}>
+                    {plan.nombre}{plan.especialidad ? ` · ${plan.especialidad}` : ""}
+                  </option>
+                ))}
+              </select>
+            </div>
             <div className="field">
               <label htmlFor="course-shift">Turno</label>
               <select
@@ -2119,7 +2217,7 @@ function App() {
             <div className="field">
               <label>Materias del curso</label>
               <div className="course-subject-options">
-                {materias.map((materia) => (
+                {eligibleCourseSubjects.map((materia) => (
                   <label className="course-subject-option" key={materia.codigo}>
                     <input
                       type="checkbox"
@@ -2138,15 +2236,16 @@ function App() {
                     <span>{materia.nombre}</span>
                   </label>
                 ))}
-                {!materias.length && (
-                  <div className="empty-state">No hay materias cargadas.</div>
+                {!eligibleCourseSubjects.length && (
+                  <div className="empty-state">
+                    {selectedCoursePlan ? "El plan no tiene materias para este año." : "Elegí un plan para ver sus materias."}
+                  </div>
                 )}
               </div>
             </div>
             {modalCurso.mode === "edit" && (
               <div className="course-delete-warning" role="note">
-                Eliminar no se puede deshacer. No se pueden eliminar cursos con
-                alumnos o notas asociadas.
+                Eliminar no se puede deshacer. Los cursos con inscripciones, calificaciones o personal asignado están protegidos.
               </div>
             )}
             <div className="modal-footer">
@@ -2185,9 +2284,9 @@ function App() {
             <div className="modal-title">
               {modalMateria.mode === "new" ? "Nueva materia" : "Editar materia"}
             </div>
-            <div className="modal-sub">
-              Administrá la materia del catálogo global y su asignación al ciclo lectivo.
-            </div>
+            {modalMateria.mode === "edit" && (
+              <p className="modal-sub">Administrá los años en que se dicta desde Planes de estudio.</p>
+            )}
             {modalMateria.mode === "new" && (
               <div className="field">
                 <label htmlFor="subject-code">Código</label>
@@ -2239,6 +2338,29 @@ function App() {
                 El nombre se comparte entre todos los ciclos. Esta acción quita
                 la materia solo del ciclo actual.
               </div>
+            )}
+            {modalMateria.mode === "new" && (
+              <>
+                <div className="field">
+                  <label htmlFor="subject-plan">Plan de estudio</label>
+                  <select id="subject-plan" required value={materiaForm.id_plan_estudio}
+                    onChange={(event) => setMateriaForm({ ...materiaForm, id_plan_estudio: event.target.value, anio: "" })}>
+                    <option value="">Seleccioná un plan</option>
+                    {planes.map((plan) => (
+                      <option key={plan.id_plan_estudio} value={plan.id_plan_estudio}>{plan.nombre}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="field">
+                  <label htmlFor="subject-year">Año del plan</label>
+                  <select id="subject-year" required value={materiaForm.anio}
+                    onChange={(event) => setMateriaForm({ ...materiaForm, anio: event.target.value })}>
+                    <option value="">Seleccioná un año</option>
+                    {planYears(planes.find((plan) => String(plan.id_plan_estudio) === materiaForm.id_plan_estudio))
+                      .map((year) => <option key={year} value={year}>{year}.º</option>)}
+                  </select>
+                </div>
+              </>
             )}
             <div className="modal-footer">
               {modalMateria.mode === "edit" && (
@@ -2349,7 +2471,7 @@ function App() {
                   }
                 />
               </div>
-              {isFailedGrade(notaForm.FINAL) && (
+              {(isFailedGrade(notaForm.FINAL) || notaForm.DICIEMBRE !== "") && (
                 <div className="nota-field">
                   <label htmlFor="grade-DICIEMBRE">Diciembre</label>
                   <input
@@ -2368,7 +2490,7 @@ function App() {
                   />
                 </div>
               )}
-              {isFailedGrade(notaForm.DICIEMBRE) && (
+              {(isFailedGrade(notaForm.DICIEMBRE) || notaForm.FEBRERO !== "") && (
                 <div className="nota-field">
                   <label htmlFor="grade-FEBRERO">Febrero</label>
                   <input
@@ -2397,6 +2519,14 @@ function App() {
               <span>Notificar al alumno</span>
             </label>
 
+            <div className="field">
+              <label htmlFor="grade-DEFINITIVA">Calificación definitiva (opcional)</label>
+              <input id="grade-DEFINITIVA" type="number" min="1" max="10" step="0.01"
+                value={notaForm.DEFINITIVA}
+                onChange={(event) => setNotaForm({ ...notaForm, DEFINITIVA: event.target.value })}
+              />
+              <small>Si queda vacía, el boletín toma la última instancia disponible de cierre.</small>
+            </div>
             <div className="modal-footer">
               <button
                 type="button"
@@ -2766,6 +2896,7 @@ function AlumnosPage({
   filterEstado,
   setFilterEstado,
   canManageStudents,
+  canAddStudent,
   openNewAlumno,
   openEditAlumno,
 }) {
@@ -2783,7 +2914,7 @@ function AlumnosPage({
     <>
       <div className="section-header">
         <div className="section-title">Alumnos</div>
-        {canManageStudents && (
+        {canAddStudent && (
           <button className="btn btn-blue" onClick={openNewAlumno}>
             + Nuevo alumno
           </button>
@@ -2810,8 +2941,7 @@ function AlumnosPage({
             <option value="">Todos los cursos</option>
             {cursos.map((curso) => (
               <option key={curso.id_curso} value={curso.id_curso}>
-                {curso.anio}° {curso.division}°
-                {curso.especialidad && ` — ${curso.especialidad}`}
+                {courseLabel(curso)}
               </option>
             ))}
           </select>
@@ -2909,6 +3039,7 @@ function DocentesPage({
   cursos,
   materias,
   canManageTeachers,
+  canAddTeacher,
   openNewDocente,
   openEditDocente,
 }) {
@@ -2984,7 +3115,7 @@ function DocentesPage({
     <>
       <div className="section-header">
         <div className="section-title">Docentes</div>
-        {canManageTeachers && (
+        {canAddTeacher && (
           <button
             type="button"
             className="btn btn-blue"
@@ -3029,8 +3160,7 @@ function DocentesPage({
             <option value="">Todos los cursos</option>
             {cursos.map((curso) => (
               <option key={curso.id_curso} value={curso.id_curso}>
-                {curso.anio}° {curso.division}°
-                {curso.especialidad && ` — ${curso.especialidad}`}
+                {courseLabel(curso)}
               </option>
             ))}
           </select>
@@ -3189,8 +3319,8 @@ function MateriasPage({
         </button>
       </div>
       <p className="muted-text">
-        El catálogo es global; asigná al ciclo actual las materias que va a
-        utilizar. Cada materia se registra una sola vez.
+        Cada materia tiene un código de catálogo y puede integrar varios planes y años.
+        Configurá esas relaciones en Planes de estudio.
       </p>
       <div className="card" style={{ marginBottom: 20 }}>
         <div className="filters">
@@ -3241,6 +3371,9 @@ function MateriasPage({
                 <div className="materia-prof">
                   {materia.descripcion || "Sin descripción"}
                 </div>
+                {materia.planes?.map(({ id_plan_estudio, plan, anio }) => (
+                  <div className="materia-prof" key={`${id_plan_estudio}/${anio}`}>{plan} · {anio}.º</div>
+                ))}
               </div>
               <span className="badge badge-blue">
                 {materia.profesores.length}{" "}
@@ -3368,7 +3501,7 @@ function CursosPage({
       <div className="my-notas-grid">
         {cursos.map((curso) => {
           const isSelected = selectedCourseId === curso.id_curso;
-          const label = `${curso.anio}° ${curso.division}°${curso.especialidad ? ` — ${curso.especialidad}` : ""}`;
+          const label = courseLabel(curso);
           return (
             <article
               key={curso.id_curso}
@@ -3381,6 +3514,10 @@ function CursosPage({
                 </span>
               </div>
               <div className="materia-body">
+                <div className="nota-row">
+                  <span className="nota-row-label">Plan de estudio</span>
+                  <span className="nota-row-val">{curso.plan_estudio}</span>
+                </div>
                 <div className="nota-row">
                   <span className="nota-row-label">Turno</span>
                   <span className="nota-row-val">
@@ -3493,11 +3630,182 @@ function CursosPage({
   );
 }
 
+function StudyPlansPage({ planes, especialidades, catalogo, onChange, pushToast }) {
+  const [form, setForm] = useState(null);
+  const [year, setYear] = useState("");
+  const [code, setCode] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  function open(plan, copy = false) {
+    setForm({
+      id: copy ? null : plan?.id_plan_estudio,
+      nombre: copy ? `${plan.nombre.slice(0, 92)} (copia)` : plan?.nombre || "",
+      ciclo: plan?.ciclo || "Básico",
+      id_especialidad: plan?.id_especialidad || "",
+      materias: plan?.materias.map(({ anio, codigo }) => ({ anio, codigo })) || [],
+    });
+    setYear("");
+    setCode("");
+  }
+
+  async function save(event) {
+    event.preventDefault();
+    setSaving(true);
+    try {
+      await apiFetch(form.id ? `/planes-estudio/${form.id}` : "/planes-estudio", {
+        method: form.id ? "PUT" : "POST",
+        body: JSON.stringify(form),
+      });
+      setForm(null);
+      pushToast("Plan guardado");
+      await onChange();
+    } catch (error) {
+      pushToast(error.message, "warn");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function remove() {
+    if (!window.confirm(`¿Eliminar el plan «${form.nombre}»?`)) return;
+    setSaving(true);
+    try {
+      await apiFetch(`/planes-estudio/${form.id}`, { method: "DELETE" });
+      setForm(null);
+      pushToast("Plan eliminado");
+      await onChange();
+    } catch (error) {
+      pushToast(error.message, "warn");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const available = form && catalogo.filter(
+    (subject) => !form.materias.some((item) => item.anio === Number(year) && item.codigo === subject.codigo),
+  );
+
+  return (
+    <>
+      <div className="section-header">
+        <div className="section-title">Planes de estudio</div>
+        <button type="button" className="btn btn-blue" onClick={() => open()}>+ Nuevo plan</button>
+      </div>
+      <div className="my-notas-grid">
+        {planes.map((plan) => (
+          <article className="materia-card course-card" key={plan.id_plan_estudio}>
+            <div className="materia-header">
+              <div>
+                <div className="materia-name">{plan.nombre}</div>
+                <div className="materia-prof">Ciclo {plan.ciclo}{plan.especialidad && ` · ${plan.especialidad}`}</div>
+              </div>
+            </div>
+            <div className="materia-body">
+              {planYears(plan).map((anio) => {
+                const modules = plan.materias.filter((item) => item.anio === anio);
+                return (
+                  <div className="nota-row" key={anio}>
+                    <span className="nota-row-label">{anio}.º año</span>
+                    <span className="nota-row-val">{modules.map((item) => item.nombre).join(", ") || "Sin materias"}</span>
+                  </div>
+                );
+              })}
+            </div>
+            <div className="course-actions">
+              <button type="button" className="btn btn-ghost btn-sm" onClick={() => open(plan)}>Editar</button>
+              <button type="button" className="btn btn-ghost btn-sm" onClick={() => open(plan, true)}>Duplicar</button>
+            </div>
+          </article>
+        ))}
+      </div>
+      {form && (
+        <div className="modal-overlay open">
+          <form className="modal" onSubmit={save}>
+            <div className="modal-title">{form.id ? "Editar plan" : "Nuevo plan"}</div>
+            <div className="field">
+              <label htmlFor="plan-name">Nombre del plan</label>
+              <input id="plan-name" value={form.nombre} maxLength={100} required
+                onChange={(event) => setForm({ ...form, nombre: event.target.value })} />
+            </div>
+            <div className="field">
+              <label htmlFor="plan-cycle">Ciclo</label>
+              <select id="plan-cycle" value={form.ciclo} onChange={(event) => {
+                const ciclo = event.target.value;
+                const years = planYears({ ciclo });
+                setForm({ ...form, ciclo, id_especialidad: "", materias: form.materias.filter((item) => years.includes(item.anio)) });
+                setYear("");
+                setCode("");
+              }}>
+                <option value="Básico">Ciclo Básico (1.º y 2.º)</option>
+                <option value="Superior">Ciclo Superior (3.º a 6.º)</option>
+              </select>
+            </div>
+            {form.ciclo === "Superior" && (
+              <div className="field">
+                <label htmlFor="plan-specialty">Especialidad</label>
+                <select id="plan-specialty" value={form.id_especialidad} required
+                  onChange={(event) => setForm({ ...form, id_especialidad: Number(event.target.value) || "" })}>
+                  <option value="">Seleccioná una especialidad</option>
+                  {especialidades.map((item) => <option key={item.id_especialidad} value={item.id_especialidad}>{item.nombre}</option>)}
+                </select>
+              </div>
+            )}
+            <fieldset className="scope-fieldset">
+              <legend>Agregar una materia del catálogo</legend>
+              <div className="field">
+                <label htmlFor="plan-year">Año del plan</label>
+                <select id="plan-year" value={year} onChange={(event) => { setYear(event.target.value); setCode(""); }}>
+                  <option value="">Seleccioná un año</option>
+                  {planYears(form).map((anio) => <option key={anio} value={anio}>{anio}.º</option>)}
+                </select>
+              </div>
+              <div className="field">
+                <label htmlFor="plan-subject">Materia</label>
+                <select id="plan-subject" value={code} disabled={!year} onChange={(event) => setCode(event.target.value)}>
+                  <option value="">Seleccioná una materia</option>
+                  {available.map((item) => <option key={item.codigo} value={item.codigo}>{item.nombre} ({item.codigo})</option>)}
+                </select>
+              </div>
+              <button type="button" className="btn btn-ghost btn-sm" disabled={!year || !code} onClick={() => {
+                setForm({ ...form, materias: [...form.materias, { anio: Number(year), codigo: code }] });
+                setCode("");
+              }}>Agregar materia</button>
+            </fieldset>
+            {planYears(form).map((anio) => (
+              <fieldset className="scope-fieldset" key={anio}>
+                <legend>{anio}.º año</legend>
+                {form.materias.filter((item) => item.anio === anio).map((item) => (
+                  <div className="plan-subject-row" key={item.codigo}>
+                    <span>{catalogo.find((subject) => subject.codigo === item.codigo)?.nombre || item.codigo}</span>
+                    <button type="button" className="btn btn-ghost btn-sm"
+                      aria-label={`Quitar ${item.codigo} de ${anio}.º año`}
+                      onClick={() => setForm({ ...form, materias: form.materias.filter((other) => other !== item) })}>Quitar</button>
+                  </div>
+                ))}
+                {!form.materias.some((item) => item.anio === anio) && <small>Sin materias</small>}
+              </fieldset>
+            ))}
+            <div className="modal-footer">
+              {form.id && (
+                <button type="button" className="btn btn-danger" disabled={saving} onClick={remove}>Eliminar plan</button>
+              )}
+              <button type="button" className="btn btn-ghost" disabled={saving} onClick={() => setForm(null)}>Cancelar</button>
+              <button type="submit" className="btn btn-blue" disabled={saving}>Guardar plan</button>
+            </div>
+          </form>
+        </div>
+      )}
+    </>
+  );
+}
+
 function PersonalAdminPage({
   resource,
   title,
   includeCargo = false,
   currentAdminDni,
+  cursos = [],
+  ciclo,
   pushToast,
 }) {
   const singular = resource === "preceptores" ? "preceptor" : "administrador";
@@ -3635,18 +3943,23 @@ function PersonalAdminPage({
 
   async function editPermissions(person) {
     try {
-      const current = await apiFetch(`/preceptores/${encodeURIComponent(person.dni)}/permisos`);
-      setPermissionModal({ person, permisos: current });
+      const path = `/preceptores/${encodeURIComponent(person.dni)}`;
+      const [permisos, asignaciones] = await Promise.all([
+        apiFetch(`${path}/permisos`),
+        apiFetch(`${path}/asignaciones`),
+      ]);
+      setPermissionModal({ person, permisos, asignaciones });
     } catch (error) { pushToast(error.message, "warn"); }
   }
 
   async function savePermissions() {
     try {
       await apiFetch(`/preceptores/${encodeURIComponent(permissionModal.person.dni)}/permisos`, {
-        method: "PUT", body: JSON.stringify({ permisos: permissionModal.permisos }),
+        method: "PUT",
+        body: JSON.stringify({ permisos: permissionModal.permisos, asignaciones: permissionModal.asignaciones }),
       });
       setPermissionModal(null);
-      pushToast("Permisos actualizados");
+      pushToast("Permisos y asignaciones actualizados");
     } catch (error) { pushToast(error.message, "warn"); }
   }
 
@@ -3900,18 +4213,21 @@ function PersonalAdminPage({
           modal={permissionModal}
           setModal={setPermissionModal}
           onSave={savePermissions}
+          cursos={cursos}
+          ciclo={ciclo}
         />
       )}
     </>
   );
 }
 
-function PreceptorPermissionsModal({ modal, setModal, onSave }) {
+function PreceptorPermissionsModal({ modal, setModal, onSave, cursos, ciclo }) {
   const options = [
     ["alumnos.editar_datos", "Editar datos de alumnos"],
     ["alumnos.cambiar_estado", "Cambiar estado de alumnos"],
     ["docentes.editar_datos", "Editar datos de docentes"],
     ["docentes.cambiar_estado", "Cambiar estado de docentes"],
+    ["notas.editar", "Cargar y editar calificaciones"],
   ];
   return (
     <div className="modal-overlay open" onMouseDown={(event) => event.target === event.currentTarget && setModal(null)}>
@@ -3926,6 +4242,36 @@ function PreceptorPermissionsModal({ modal, setModal, onSave }) {
             </label>
           ))}
         </div>
+        <h3 className="modal-sub">Cursos y materias · Ciclo {ciclo}</h3>
+        {!cursos.some((course) => course.materias?.length) && (
+          <p className="empty-state">Asigná materias a los cursos del ciclo para habilitarlas en preceptoría.</p>
+        )}
+        {cursos.filter((course) => course.materias?.length).map((course) => (
+          <fieldset className="scope-fieldset" key={course.id_curso}>
+            <legend>{courseLabel(course)}</legend>
+            <div className="course-subject-options">
+              {course.materias.map((subject) => {
+                const matches = (item) => item.id_curso === course.id_curso && item.codigo_materia === subject.codigo;
+                return (
+                  <label className="course-subject-option" key={subject.codigo}>
+                    <input type="checkbox" checked={modal.asignaciones.some(matches)}
+                      onChange={(event) => {
+                        const checked = event.target.checked;
+                        setModal((current) => ({
+                          ...current,
+                          asignaciones: checked
+                            ? [...current.asignaciones, { id_curso: course.id_curso, codigo_materia: subject.codigo }]
+                            : current.asignaciones.filter((item) => !matches(item)),
+                        }));
+                      }}
+                    />
+                    {subject.nombre}
+                  </label>
+                );
+              })}
+            </div>
+          </fieldset>
+        ))}
         <div className="modal-footer">
           <button type="button" className="btn btn-ghost" onClick={() => setModal(null)}>Cancelar</button>
           <button type="button" className="btn btn-blue" onClick={onSave}>Guardar permisos</button>
@@ -4058,8 +4404,7 @@ function NotasPage({
             <option value="">Seleccionar curso…</option>
             {cursos.map((curso) => (
               <option key={curso.id_curso} value={curso.id_curso}>
-                {curso.anio}° {curso.division}°
-                {curso.especialidad && ` — ${curso.especialidad}`}
+                {courseLabel(curso)}
               </option>
             ))}
           </select>
@@ -4103,6 +4448,7 @@ function NotasPage({
                   <th>Final</th>
                   <th>Diciembre</th>
                   <th>Febrero</th>
+                  <th>Definitiva</th>
                   <th>Acciones</th>
                 </tr>
               </thead>
@@ -4142,6 +4488,7 @@ function NotasPage({
                     >
                       {row.notas.FEBRERO ?? "—"}
                     </td>
+                    <td>{row.notas.DEFINITIVA ?? row.notas.FEBRERO ?? row.notas.DICIEMBRE ?? row.notas.FINAL ?? "—"}</td>
                     <td>
                       <button
                         type="button"
@@ -4167,7 +4514,7 @@ function NotasPage({
 
                 {!noteRows.length && (
                   <tr>
-                    <td colSpan="11">
+                    <td colSpan="12">
                       <div className="empty-state">
                         No hay calificaciones para mostrar.
                       </div>
@@ -4281,8 +4628,7 @@ function ConsultaPage({ isAlumno, boletines, alumnos, cursos, pushToast }) {
             <option value="">Todos los cursos</option>
             {cursos.map((curso) => (
               <option key={curso.id_curso} value={curso.id_curso}>
-                {curso.anio}° {curso.division}°
-                {curso.especialidad && ` — ${curso.especialidad}`}
+                {courseLabel(curso)}
               </option>
             ))}
           </select>
@@ -4450,8 +4796,8 @@ function BulletinHistory({ bulletin, showStudentName = true, onPdfError }) {
           {cycle.cursos?.map((curso) => (
             <div className="bulletin-course" key={curso.id_curso}>
               <h4>
-                {curso.anio}° {curso.division}°
-                {curso.especialidad && ` — ${curso.especialidad}`}
+                {courseLabel(curso)}
+                {curso.fecha_baja && " · Inscripción cerrada"}
               </h4>
               <div className="table-wrap">
                 <table className="bulletin-table">
@@ -4467,7 +4813,21 @@ function BulletinHistory({ bulletin, showStudentName = true, onPdfError }) {
                   <tbody>
                     {curso.materias?.map((materia) => (
                       <tr key={materia.codigo}>
-                        <th scope="row">{materia.nombre}</th>
+                        <th scope="row">
+                          {materia.nombre}
+                          {materia.evaluaciones?.length > 0 && (
+                            <details className="bulletin-evaluations">
+                              <summary>Evaluaciones individuales</summary>
+                              <ul>
+                                {materia.evaluaciones.map((item) => (
+                                  <li key={item.id}>{item.tema} · {item.calificacion}
+                                    {item.adeuda === true && " · Adeuda"}
+                                  </li>
+                                ))}
+                              </ul>
+                            </details>
+                          )}
+                        </th>
                         {BULLETIN_PERIODS.map(([period]) => {
                           const grades =
                             materia.notas?.filter(
@@ -4498,7 +4858,7 @@ function BulletinHistory({ bulletin, showStudentName = true, onPdfError }) {
                     ))}
                     {!curso.materias?.length && (
                       <tr>
-                        <td colSpan={BULLETIN_PERIODS.length + 1}>
+                        <td colSpan={BULLETIN_PERIODS.length + 2}>
                           No hay materias asignadas a este curso.
                         </td>
                       </tr>

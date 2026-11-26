@@ -174,6 +174,19 @@ async function auth(req, res, next) {
     if (token) tokens.delete(token);
     return fail(res, 401, "No autenticado");
   }
+  if (session.user.rol === "preceptor") {
+    try {
+      const result = await pool.query(
+        "SELECT 1 FROM preceptor WHERE dni=$1 AND estado='Activo'", [session.user.dni_preceptor],
+      );
+      if (!result.rowCount) {
+        tokens.delete(token);
+        return fail(res, 401, "No autenticado");
+      }
+    } catch (error) {
+      return next(error);
+    }
+  }
   req.user = session.user;
   next();
 }
@@ -197,6 +210,7 @@ const PRECEPTOR_PERMISSIONS = new Set([
   "alumnos.cambiar_estado",
   "docentes.editar_datos",
   "docentes.cambiar_estado",
+  "notas.editar",
 ]);
 
 async function hasPreceptorPermission(user, permission) {
@@ -209,42 +223,88 @@ async function hasPreceptorPermission(user, permission) {
   return Boolean(rows[0]);
 }
 
-async function replaceCourseSubjects(client, courseId, cycleId, subjectCodes) {
-  if (
-    !Array.isArray(subjectCodes) ||
-    subjectCodes.some((code) => typeof code !== "string")
-  ) {
-    throw new Error("La lista de materias no es válida");
-  }
-  const uniqueCodes = [...new Set(subjectCodes)];
-  if (uniqueCodes.length) {
-    const { rows } = await client.query(
-      "SELECT COUNT(*)::int AS count FROM ciclo_materia WHERE id_ciclo_lectivo=$1 AND codigo_materia=ANY($2::varchar[])",
-      [cycleId, uniqueCodes],
-    );
-    if (rows[0].count !== uniqueCodes.length)
-      throw new Error("Una o más materias no existen");
-  }
-
-  await client.query(
-    `
-    DELETE FROM curso_materia
-    WHERE id_curso=$1
-      AND id_ciclo_lectivo=$2
-      AND NOT (codigo_materia=ANY($3::varchar[]))
-  `,
-    [courseId, cycleId, uniqueCodes],
+async function hasPreceptorStudentScope(db, user, dni, year) {
+  if (user.rol === "admin") return true;
+  const cycleId = await getCycleId(db, year);
+  const result = await db.query(
+    `SELECT 1 FROM alumno_curso ac JOIN preceptor_curso_materia scope
+       ON scope.id_curso=ac.id_curso AND scope.id_ciclo_lectivo=ac.id_ciclo_lectivo
+     WHERE ac.dni_alumno=$1 AND ac.id_ciclo_lectivo=$2 AND ac.fecha_baja IS NULL
+       AND scope.dni_preceptor=$3 LIMIT 1`,
+    [dni, cycleId, user.dni_preceptor],
   );
-  if (uniqueCodes.length) {
-    await client.query(
-      `
-      INSERT INTO curso_materia (id_curso, codigo_materia, id_ciclo_lectivo)
-      SELECT $1, codigo, $3 FROM UNNEST($2::varchar[]) AS subjects(codigo)
-      ON CONFLICT (id_curso, codigo_materia, id_ciclo_lectivo) DO NOTHING
-    `,
-      [courseId, uniqueCodes, cycleId],
-    );
-  }
+  return result.rowCount > 0;
+}
+
+async function hasPreceptorTeacherScope(user, dni, year) {
+  if (user.rol === "admin") return true;
+  const cycleId = await getCycleId(pool, year);
+  const result = await pool.query(
+    `SELECT 1 FROM profesor_curso_materia pcm
+     JOIN preceptor_curso_materia scope USING (id_curso, codigo_materia, id_ciclo_lectivo)
+     JOIN profesor titular ON titular.dni=pcm.dni_profesor
+     WHERE pcm.id_ciclo_lectivo=$1 AND scope.dni_preceptor=$2
+       AND (titular.dni=$3 OR (titular.estado='Licencia' AND titular.dni_suplente=$3))
+     LIMIT 1`,
+    [cycleId, user.dni_preceptor, dni],
+  );
+  return result.rowCount > 0;
+}
+
+function requestError(status, message) {
+  return Object.assign(new Error(message), { status });
+}
+
+function validSubjectCode(code) {
+  return typeof code === "string" && /^[A-Z0-9_-]{2,20}$/.test(code);
+}
+
+function validateCourseSubjects(codes) {
+  if (!Array.isArray(codes) || codes.some((code) => !validSubjectCode(code)))
+    throw requestError(400, "La lista de materias no es válida");
+  if (new Set(codes).size !== codes.length)
+    throw requestError(400, "No se pueden repetir materias en un curso");
+}
+
+async function lockPlan(db, id) {
+  if (!Number.isInteger(id) || id < 1)
+    throw requestError(400, "Seleccioná un plan de estudio");
+  const { rows } = await db.query(
+    "SELECT * FROM plan_estudio WHERE id_plan_estudio=$1 FOR SHARE",
+    [id],
+  );
+  if (!rows[0]) throw requestError(400, "El plan de estudio no existe");
+  return rows[0];
+}
+
+function planAllowsYear(plan, year) {
+  return Number.isInteger(year) && year >= 1 && year <= 6 &&
+    (year <= 2 ? plan.ciclo === "Básico" : plan.ciclo === "Superior");
+}
+
+async function validatePlanSubjects(db, planId, year, codes) {
+  const { rows } = await db.query(
+    `SELECT codigo_materia FROM plan_estudio_materia
+     WHERE id_plan_estudio=$1 AND anio=$2 AND codigo_materia=ANY($3::varchar[])`,
+    [planId, year, codes],
+  );
+  if (rows.length !== codes.length)
+    throw requestError(400, "Hay materias que no pertenecen al plan y año del curso");
+}
+
+async function addCourseSubjects(db, course, codes) {
+  await db.query(
+    `INSERT INTO ciclo_materia (id_ciclo_lectivo, codigo_materia)
+     SELECT $1, codigo FROM unnest($2::varchar[]) AS subject(codigo)
+     ON CONFLICT DO NOTHING`,
+    [course.id_ciclo_lectivo, codes],
+  );
+  await db.query(
+    `INSERT INTO curso_materia (id_curso, id_ciclo_lectivo, codigo_materia, id_plan_estudio, anio)
+     SELECT $1, $2, codigo, $3, $4 FROM unnest($5::varchar[]) AS subject(codigo)
+     ON CONFLICT DO NOTHING`,
+    [course.id_curso, course.id_ciclo_lectivo, course.id_plan_estudio, course.anio, codes],
+  );
 }
 
 app.get("/api/health", async (_req, res) => {
@@ -331,6 +391,7 @@ app.get("/api/me", auth, async (req, res) => {
 });
 
 app.get("/api/dashboard", auth, async (req, res) => {
+  if (req.user.rol !== "admin") return res.json({ alumnos_activos: 0, calificaciones_cargadas: 0 });
   try {
     const { rows } = await pool.query(
       `
@@ -362,17 +423,19 @@ app.get("/api/dashboard", auth, async (req, res) => {
 
 app.get("/api/alumnos", auth, async (req, res) => {
   try {
+    const { rol: role, dni_preceptor: preceptor, dni_profesor: teacher, dni_alumno: student } = req.user;
     const cicloLectivo = Number(req.query.ciclo_lectivo) || null;
     const { rows } = await pool.query(
       `
       SELECT a.dni, a.nombre, a.apellido, a.email, a.estado,
+             a.fecha_nacimiento::text AS fecha_nacimiento, a.genero, a.nacionalidad,
              d.calle, d.numero_calle, d.departamento, d.localidad,
              c.id_curso, c.anio, c.division, e.nombre AS especialidad, cl.anio AS ciclo_lectivo,
-             COALESCE(ROUND(AVG(n.calificacion), 2), 0) AS promedio,
-             ROUND(AVG(n.calificacion), 2) AS promedio_anio,
-             (SELECT ROUND(AVG(nota_general.calificacion), 2)
+             CASE WHEN $2='admin' OR $2='alumno' THEN COALESCE(ROUND(AVG(n.calificacion), 2), 0) END AS promedio,
+             CASE WHEN $2='admin' OR $2='alumno' THEN ROUND(AVG(n.calificacion), 2) END AS promedio_anio,
+             CASE WHEN $2='admin' OR $2='alumno' THEN (SELECT ROUND(AVG(nota_general.calificacion), 2)
               FROM nota nota_general
-              WHERE nota_general.dni_alumno=a.dni) AS promedio_general
+              WHERE nota_general.dni_alumno=a.dni AND nota_general.tipo_evaluacion<>'DEFINITIVA') END AS promedio_general
       FROM alumno a
       LEFT JOIN domicilio d ON d.id_domicilio=a.id_domicilio
       LEFT JOIN LATERAL (
@@ -394,10 +457,26 @@ app.get("/api/alumnos", auth, async (req, res) => {
       LEFT JOIN nota n ON n.dni_alumno = a.dni
         AND n.id_ciclo_lectivo = ac.id_ciclo_lectivo
         AND n.id_curso = ac.id_curso
+        AND n.tipo_evaluacion<>'DEFINITIVA'
+      WHERE $2='admin' OR ($2='alumno' AND a.dni=$5)
+        OR ($2='preceptor' AND EXISTS (
+          SELECT 1 FROM preceptor_curso_materia scope
+          WHERE scope.dni_preceptor=$3 AND scope.id_curso=ac.id_curso
+            AND scope.id_ciclo_lectivo=ac.id_ciclo_lectivo
+        ))
+        OR ($2='profesor' AND EXISTS (
+          SELECT 1 FROM profesor_curso_materia pcm
+          JOIN profesor titular ON titular.dni=pcm.dni_profesor
+          JOIN profesor docente ON docente.dni=$4
+          WHERE pcm.id_curso=ac.id_curso AND pcm.id_ciclo_lectivo=ac.id_ciclo_lectivo AND (
+            (titular.dni=$4 AND titular.estado='Activo')
+            OR (titular.dni_suplente=$4 AND titular.estado='Licencia' AND docente.estado='Suplente')
+          )
+        ))
       GROUP BY a.dni, d.id_domicilio, c.id_curso, e.nombre, cl.anio
       ORDER BY a.apellido, a.nombre
       `,
-      [cicloLectivo],
+      [cicloLectivo, role, preceptor, teacher, student],
     );
     res.json(rows);
   } catch (error) {
@@ -406,22 +485,13 @@ app.get("/api/alumnos", auth, async (req, res) => {
   }
 });
 
-async function getStudentBulletins(dni, cycleYear = null) {
+async function getStudentBulletins(dni, cycleYear = null, preceptorDni = null) {
   const { rows } = await pool.query(
     `
-    WITH current_enrollment AS (
-      SELECT DISTINCT ON (ac.dni_alumno, ac.id_ciclo_lectivo) ac.*
-      FROM alumno_curso ac
-      WHERE ac.dni_alumno=$1
-      ORDER BY ac.dni_alumno, ac.id_ciclo_lectivo,
-               (ac.fecha_baja IS NULL) DESC,
-               ac.fecha_inscripcion DESC,
-               ac.id_curso DESC
-    )
-    SELECT a.dni, a.nombre, a.apellido, a.fecha_nacimiento,
+    SELECT a.dni, a.nombre, a.apellido, a.fecha_nacimiento::text AS fecha_nacimiento,
            a.genero, a.nacionalidad,
            d.calle, d.numero_calle, d.departamento, d.localidad,
-           ac.id_curso,
+           ac.id_curso, ac.fecha_inscripcion, ac.fecha_baja,
            cl.anio AS ciclo_lectivo, c.anio AS anio_curso, c.division,
            e.nombre AS especialidad, t.jornada AS turno,
            subjects.codigo_materia,
@@ -456,7 +526,7 @@ async function getStudentBulletins(dni, cycleYear = null) {
                AND ni.id_ciclo_lectivo=ac.id_ciclo_lectivo
                AND ni.codigo_materia=subjects.codigo_materia
            ), '[]'::jsonb) AS evaluaciones
-    FROM current_enrollment ac
+    FROM alumno_curso ac
     JOIN alumno a ON a.dni=ac.dni_alumno
     LEFT JOIN domicilio d ON d.id_domicilio=a.id_domicilio
     JOIN ciclo_lectivo cl ON cl.id_ciclo_lectivo=ac.id_ciclo_lectivo
@@ -474,13 +544,24 @@ async function getStudentBulletins(dni, cycleYear = null) {
       FROM nota
       WHERE dni_alumno=ac.dni_alumno AND id_curso=ac.id_curso
         AND id_ciclo_lectivo=ac.id_ciclo_lectivo
+      UNION
+      SELECT codigo_materia
+      FROM nota_individual
+      WHERE dni_alumno=ac.dni_alumno AND id_curso=ac.id_curso AND id_ciclo_lectivo=ac.id_ciclo_lectivo
     ) subjects ON TRUE
     LEFT JOIN materia cm ON cm.codigo=subjects.codigo_materia
     WHERE ac.dni_alumno=$1
       AND ($2::integer IS NULL OR cl.anio=$2)
-    ORDER BY cl.anio DESC, c.anio, c.division, cm.nombre
+      AND ($3::varchar IS NULL OR EXISTS (
+        SELECT 1 FROM preceptor_curso_materia scope
+        WHERE scope.dni_preceptor=$3 AND scope.id_curso=ac.id_curso
+          AND scope.id_ciclo_lectivo=ac.id_ciclo_lectivo
+          AND scope.codigo_materia=subjects.codigo_materia
+      ))
+    ORDER BY cl.anio DESC, ac.fecha_baja NULLS FIRST, ac.fecha_inscripcion DESC,
+             c.anio, c.division, cm.nombre
   `,
-    [dni, cycleYear],
+    [dni, cycleYear, preceptorDni],
   );
 
   const cycles = new Map();
@@ -501,6 +582,8 @@ async function getStudentBulletins(dni, cycleYear = null) {
         division: row.division,
         especialidad: row.especialidad,
         turno: row.turno,
+        fecha_inscripcion: row.fecha_inscripcion,
+        fecha_baja: row.fecha_baja,
         materias: [],
         _subjects: new Map(),
       };
@@ -527,11 +610,11 @@ async function getStudentBulletins(dni, cycleYear = null) {
           id,
           ...grade,
         }));
-        grades.push(...subject.notas);
-        allGrades.push(...subject.notas);
+        grades.push(...subject.notas.filter((note) => note.tipo_evaluacion !== "DEFINITIVA"));
       }
       delete course._subjects;
     }
+    allGrades.push(...grades);
     cycle.promedio = grades.length
       ? grades.reduce((sum, grade) => sum + Number(grade.calificacion), 0) /
         grades.length
@@ -539,7 +622,14 @@ async function getStudentBulletins(dni, cycleYear = null) {
     delete cycle._courses;
   }
 
-  const student = rows[0];
+  let student = rows[0];
+  if (!student && !preceptorDni) {
+    const result = await pool.query(
+      `SELECT a.*, d.calle, d.numero_calle, d.departamento, d.localidad
+       FROM alumno a LEFT JOIN domicilio d USING (id_domicilio) WHERE a.dni=$1`, [dni],
+    );
+    student = result.rows[0];
+  }
   return {
     dni,
     nombre: student?.nombre || "",
@@ -571,7 +661,9 @@ app.get(
     const dni = String(req.params.dni || "");
     if (!/^\d{1,20}$/.test(dni)) return fail(res, 400, "El DNI no es válido");
     try {
-      const bulletin = await getStudentBulletins(dni, requestedCycleYear(req));
+      const bulletin = await getStudentBulletins(
+        dni, requestedCycleYear(req), req.user.rol === "preceptor" ? req.user.dni_preceptor : null,
+      );
       if (!bulletin.nombre) return fail(res, 404, "No se encontró el alumno");
       res.json(bulletin);
     } catch (error) {
@@ -592,6 +684,99 @@ app.get("/api/mis-boletines", auth, roles("alumno"), async (req, res) => {
   }
 });
 
+const addressFields = [
+  ["calle", 100], ["numero_calle", 10], ["departamento", 50], ["localidad", 80],
+];
+
+function readStudentDetails(body) {
+  const values = {};
+  for (const [field, limit] of [["fecha_nacimiento", 10], ["genero", 30], ["nacionalidad", 60]]) {
+    if (!Object.hasOwn(body, field)) continue;
+    const value = body[field];
+    if (value != null && (typeof value !== "string" || value.trim().length > limit))
+      throw requestError(400, "Revisá los datos personales del alumno");
+    values[field] = value?.trim() || null;
+  }
+  if (values.fecha_nacimiento) {
+    const input = values.fecha_nacimiento;
+    const date = new Date(`${input}T00:00:00.000Z`);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(input) || !Number.isFinite(date.getTime()) ||
+        date.toISOString().slice(0, 10) !== input || input.slice(0, 4) === "0000" ||
+        date > new Date()) {
+      throw requestError(400, "La fecha de nacimiento no es válida");
+    }
+  }
+  return values;
+}
+
+async function updateStudentDetails(client, dni, details) {
+  if (!Object.keys(details).length) return;
+  await client.query(
+    `UPDATE alumno SET
+       fecha_nacimiento=CASE WHEN $2::jsonb ? 'fecha_nacimiento' THEN ($2->>'fecha_nacimiento')::date ELSE fecha_nacimiento END,
+       genero=CASE WHEN $2::jsonb ? 'genero' THEN $2->>'genero' ELSE genero END,
+       nacionalidad=CASE WHEN $2::jsonb ? 'nacionalidad' THEN $2->>'nacionalidad' ELSE nacionalidad END
+     WHERE dni=$1`,
+    [dni, details],
+  );
+}
+
+function readStudentAddress(body) {
+  if (!addressFields.some(([field]) => Object.hasOwn(body, field))) return undefined;
+
+  const values = addressFields.map(([field, limit]) => {
+    const value = body[field];
+    if (value == null) return null;
+    if (typeof value !== "string" || value.trim().length > limit)
+      throw requestError(400, "Los datos del domicilio no son válidos");
+    return value.trim() || null;
+  });
+  if (!values.some(Boolean)) return null;
+  if (!values[0] || !values[3])
+    throw requestError(400, "Para registrar un domicilio, la calle y la localidad son obligatorias");
+  return values;
+}
+
+async function insertAddress(client, address) {
+  const { rows } = await client.query(
+    `INSERT INTO domicilio (calle, numero_calle, departamento, localidad)
+     VALUES ($1,$2,$3,$4) RETURNING id_domicilio`,
+    address,
+  );
+  return rows[0].id_domicilio;
+}
+
+async function updateStudentAddress(client, dni, previousId, address) {
+  if (address === undefined) return previousId;
+  if (previousId) {
+    await client.query("SELECT id_domicilio FROM domicilio WHERE id_domicilio=$1 FOR UPDATE", [previousId]);
+    const other = await client.query(
+      `SELECT 1 FROM alumno WHERE id_domicilio=$1 AND dni<>$2
+       UNION ALL SELECT 1 FROM profesor WHERE id_domicilio=$1 LIMIT 1`,
+      [previousId, dni],
+    );
+    if (!other.rowCount && address) {
+      await client.query(
+        `UPDATE domicilio SET calle=$2, numero_calle=$3, departamento=$4, localidad=$5
+         WHERE id_domicilio=$1`,
+        [previousId, ...address],
+      );
+      return previousId;
+    }
+  }
+  const nextId = address ? await insertAddress(client, address) : null;
+  await client.query("UPDATE alumno SET id_domicilio=$2 WHERE dni=$1", [dni, nextId]);
+  if (previousId) {
+    await client.query(
+      `DELETE FROM domicilio WHERE id_domicilio=$1
+       AND NOT EXISTS (SELECT 1 FROM alumno WHERE id_domicilio=$1)
+       AND NOT EXISTS (SELECT 1 FROM profesor WHERE id_domicilio=$1)`,
+      [previousId],
+    );
+  }
+  return nextId;
+}
+
 app.post(
   "/api/alumnos",
   auth,
@@ -608,47 +793,16 @@ app.post(
       id_curso,
     } = body;
 
-    const camposDomicilio = [
-      "calle",
-      "numero_calle",
-      "departamento",
-      "localidad",
-    ];
-
-    for (const campo of camposDomicilio) {
-      if (body[campo] != null && typeof body[campo] !== "string") {
-        return fail(res, 400, "Los datos del domicilio no son válidos");
-      }
-    }
-
-    const calle = (body.calle || "").trim();
-    const numeroCalle = (body.numero_calle || "").trim();
-    const departamento = (body.departamento || "").trim();
-    const localidad = (body.localidad || "").trim();
-
-    const tieneDomicilio = Boolean(
-      calle || numeroCalle || departamento || localidad,
-    );
-
     if (!dni || !nombre || !apellido) {
       return fail(res, 400, "DNI, nombre y apellido son obligatorios");
     }
-
-    if (
-      calle.length > 100 ||
-      numeroCalle.length > 10 ||
-      departamento.length > 50 ||
-      localidad.length > 80
-    ) {
-      return fail(res, 400, "Los datos del domicilio superan el límite permitido");
-    }
-
-    if (tieneDomicilio && (!calle || !localidad)) {
-      return fail(
-        res,
-        400,
-        "Para registrar un domicilio, la calle y la localidad son obligatorias",
-      );
+    let address;
+    let details;
+    try {
+      address = readStudentAddress(body);
+      details = readStudentDetails(body);
+    } catch (error) {
+      return fail(res, error.status, error.message);
     }
 
     const client = await pool.connect();
@@ -656,25 +810,7 @@ app.post(
     try {
       await client.query("BEGIN");
 
-      let idDomicilio = null;
-
-      if (tieneDomicilio) {
-        const { rows: domicilioRows } = await client.query(
-          `
-          INSERT INTO domicilio (calle, numero_calle, departamento, localidad)
-          VALUES ($1, $2, $3, $4)
-          RETURNING id_domicilio
-          `,
-          [
-            calle,
-            numeroCalle || null,
-            departamento || null,
-            localidad,
-          ],
-        );
-
-        idDomicilio = domicilioRows[0].id_domicilio;
-      }
+      const idDomicilio = address ? await insertAddress(client, address) : null;
 
       const { rows } = await client.query(
         `
@@ -685,6 +821,7 @@ app.post(
         [dni, nombre, apellido, email || null, estado, idDomicilio],
       );
 
+      await updateStudentDetails(client, dni, details);
       await ensurePersonAccount(client, dni, "alumno", "dni_alumno");
 
       if (id_curso && estado === "Activo") {
@@ -700,7 +837,7 @@ app.post(
       }
 
       await client.query("COMMIT");
-      res.status(201).json(rows[0]);
+      res.status(201).json({ ...rows[0], ...details });
     } catch (error) {
       await client.query("ROLLBACK");
       console.error(error);
@@ -736,59 +873,20 @@ app.put(
 
     const { nombre, apellido, email, estado, id_curso } = body;
 
-const camposDomicilio = [
-  "calle",
-  "numero_calle",
-  "departamento",
-  "localidad",
-];
-
-const domicilioEnviado = camposDomicilio.some((campo) =>
-  Object.prototype.hasOwnProperty.call(body, campo),
-);
-
-for (const campo of camposDomicilio) {
-  if (body[campo] != null && typeof body[campo] !== "string") {
-    return fail(res, 400, "Los datos del domicilio no son válidos");
-  }
-}
-
-const calle = (body.calle || "").trim();
-const numeroCalle = (body.numero_calle || "").trim();
-const departamento = (body.departamento || "").trim();
-const localidad = (body.localidad || "").trim();
-
-const tieneDomicilio = Boolean(
-  calle || numeroCalle || departamento || localidad,
-);
-
-if (
-  calle.length > 100 ||
-  numeroCalle.length > 10 ||
-  departamento.length > 50 ||
-  localidad.length > 80
-) {
-  return fail(
-    res,
-    400,
-    "Los datos del domicilio superan el límite permitido",
-  );
-}
-
-if (domicilioEnviado && tieneDomicilio && (!calle || !localidad)) {
-  return fail(
-    res,
-    400,
-    "Para registrar un domicilio, la calle y la localidad son obligatorias",
-  );
-}
-
-const client = await pool.connect();
+    let address;
+    let details;
+    try {
+      address = readStudentAddress(body);
+      details = readStudentDetails(body);
+    } catch (error) {
+      return fail(res, error.status, error.message);
+    }
+    const client = await pool.connect();
 
     try {
       await client.query("BEGIN");
 
-            if (dniNuevo !== dniAnterior) {
+      if (dniNuevo !== dniAnterior) {
         const { rows: conflictoUsuario } = await client.query(
           `
           SELECT 1
@@ -863,114 +961,12 @@ const client = await pool.connect();
       }
 
 
-      if (domicilioEnviado) {
-  const domicilioAnteriorId = alumnoActual[0].id_domicilio;
-  let nuevoDomicilioId = domicilioAnteriorId;
-
-  if (tieneDomicilio) {
-    if (domicilioAnteriorId) {
-      const { rows: referencias } = await client.query(
-        `
-        SELECT EXISTS(
-          SELECT 1
-          FROM alumno
-          WHERE id_domicilio=$1
-            AND dni<>$2
-        ) AS compartido
-        `,
-        [domicilioAnteriorId, dni],
+      rows[0].id_domicilio = await updateStudentAddress(
+        client, dni, alumnoActual[0].id_domicilio, address,
       );
 
-      if (referencias[0].compartido) {
-        const { rows: domicilioRows } = await client.query(
-          `
-          INSERT INTO domicilio (
-            calle,
-            numero_calle,
-            departamento,
-            localidad
-          )
-          VALUES ($1, $2, $3, $4)
-          RETURNING id_domicilio
-          `,
-          [
-            calle,
-            numeroCalle || null,
-            departamento || null,
-            localidad,
-          ],
-        );
-
-        nuevoDomicilioId = domicilioRows[0].id_domicilio;
-      } else {
-        await client.query(
-          `
-          UPDATE domicilio
-          SET calle=$2,
-              numero_calle=$3,
-              departamento=$4,
-              localidad=$5
-          WHERE id_domicilio=$1
-          `,
-          [
-            domicilioAnteriorId,
-            calle,
-            numeroCalle || null,
-            departamento || null,
-            localidad,
-          ],
-        );
-      }
-    } else {
-      const { rows: domicilioRows } = await client.query(
-        `
-        INSERT INTO domicilio (
-          calle,
-          numero_calle,
-          departamento,
-          localidad
-        )
-        VALUES ($1, $2, $3, $4)
-        RETURNING id_domicilio
-        `,
-        [
-          calle,
-          numeroCalle || null,
-          departamento || null,
-          localidad,
-        ],
-      );
-
-      nuevoDomicilioId = domicilioRows[0].id_domicilio;
-    }
-  } else {
-    nuevoDomicilioId = null;
-  }
-
-  if (nuevoDomicilioId !== domicilioAnteriorId) {
-    await client.query(
-      "UPDATE alumno SET id_domicilio=$2 WHERE dni=$1",
-      [dni, nuevoDomicilioId],
-    );
-
-    if (domicilioAnteriorId) {
-      await client.query(
-        `
-        DELETE FROM domicilio
-        WHERE id_domicilio=$1
-          AND NOT EXISTS (
-            SELECT 1
-            FROM alumno
-            WHERE id_domicilio=$1
-          )
-        `,
-        [domicilioAnteriorId],
-      );
-    }
-  }
-
-  rows[0].id_domicilio = nuevoDomicilioId;
-}
+      await updateStudentDetails(client, dni, details);
+      Object.assign(rows[0], details);
 
       const debeActualizarCurso =
         debeDesasignarCurso ||
@@ -986,23 +982,6 @@ const client = await pool.connect();
             debeDesasignarCurso || id_curso == null || id_curso === ""
               ? null
               : Number(id_curso);
-          const { rows: previousEnrollments } = await client.query(
-            `
-            SELECT ac.id_curso, c.anio, c.id_especialidad
-            FROM alumno_curso ac
-            JOIN curso c ON c.id_curso=ac.id_curso
-              AND c.id_ciclo_lectivo=ac.id_ciclo_lectivo
-            WHERE ac.dni_alumno=$1 AND ac.id_ciclo_lectivo=$2
-            ORDER BY (ac.fecha_baja IS NULL) DESC,
-                     ac.fecha_inscripcion DESC,
-                     ac.id_curso DESC
-            LIMIT 1
-            FOR UPDATE OF ac
-          `,
-            [dni, currentCycleId],
-          );
-          const previousCourse = previousEnrollments[0];
-
           if (cursoAsignado !== null) {
             if (!Number.isInteger(cursoAsignado)) {
               await client.query("ROLLBACK");
@@ -1047,71 +1026,6 @@ const client = await pool.connect();
               [dni, cursoAsignado, currentCycleId],
             );
 
-            if (previousCourse && previousCourse.id_curso !== cursoAsignado) {
-              if (previousCourse.anio !== targetCourse.anio) {
-                await client.query(
-                  "DELETE FROM nota_individual WHERE dni_alumno=$1 AND id_ciclo_lectivo=$2",
-                  [dni, currentCycleId],
-                );
-                await client.query(
-                  "DELETE FROM nota WHERE dni_alumno=$1 AND id_ciclo_lectivo=$2",
-                  [dni, currentCycleId],
-                );
-              } else {
-                let retainedSubjectCodes = null;
-                if (
-                  previousCourse.id_especialidad !==
-                  targetCourse.id_especialidad
-                ) {
-                  const { rows: subjects } = await client.query(
-                    `
-                    SELECT codigo_materia
-                    FROM curso_materia
-                    WHERE id_curso=$1 AND id_ciclo_lectivo=$2
-                  `,
-                    [cursoAsignado, currentCycleId],
-                  );
-                  retainedSubjectCodes = subjects.map(
-                    (subject) => subject.codigo_materia,
-                  );
-                  await client.query(
-                    `
-                    DELETE FROM nota_individual
-                    WHERE dni_alumno=$1 AND id_ciclo_lectivo=$2
-                      AND NOT (codigo_materia=ANY($3::varchar[]))
-                  `,
-                    [dni, currentCycleId, retainedSubjectCodes],
-                  );
-                  await client.query(
-                    `
-                    DELETE FROM nota
-                    WHERE dni_alumno=$1 AND id_ciclo_lectivo=$2
-                      AND NOT (codigo_materia=ANY($3::varchar[]))
-                  `,
-                    [dni, currentCycleId, retainedSubjectCodes],
-                  );
-                }
-
-                await client.query(
-                  `
-                  UPDATE nota_individual
-                  SET id_curso=$3
-                  WHERE dni_alumno=$1 AND id_ciclo_lectivo=$2
-                    AND ($4::varchar[] IS NULL OR codigo_materia=ANY($4::varchar[]))
-                `,
-                  [dni, currentCycleId, cursoAsignado, retainedSubjectCodes],
-                );
-                await client.query(
-                  `
-                  UPDATE nota
-                  SET id_curso=$3
-                  WHERE dni_alumno=$1 AND id_ciclo_lectivo=$2
-                    AND ($4::varchar[] IS NULL OR codigo_materia=ANY($4::varchar[]))
-                `,
-                  [dni, currentCycleId, cursoAsignado, retainedSubjectCodes],
-                );
-              }
-            }
           } else {
             await client.query(
               `
@@ -1251,6 +1165,7 @@ app.delete(
 
 app.get("/api/docentes", auth, async (req, res) => {
   try {
+    const { rol: role, dni_preceptor: preceptor, dni_profesor: teacher } = req.user;
     const cicloLectivo = requestedCycleYear(req);
     const { rows } = await pool.query(
       `
@@ -1310,7 +1225,11 @@ app.get("/api/docentes", auth, async (req, res) => {
                  LEFT JOIN curso c2 ON c2.id_curso=pcm.id_curso
                    AND c2.id_ciclo_lectivo=pcm.id_ciclo_lectivo
                  LEFT JOIN especialidad e2 ON e2.id_especialidad=c2.id_especialidad
-                 WHERE (
+                 WHERE ($2<>'preceptor' OR EXISTS (
+                   SELECT 1 FROM preceptor_curso_materia scope
+                   WHERE scope.dni_preceptor=$3 AND scope.id_curso=pcm.id_curso
+                     AND scope.codigo_materia=pcm.codigo_materia AND scope.id_ciclo_lectivo=pcm.id_ciclo_lectivo
+                 )) AND (
                      (titular.dni=p.dni AND titular.estado IN ('Activo', 'Licencia'))
                      OR (
                        p.estado='Suplente'
@@ -1341,12 +1260,22 @@ app.get("/api/docentes", auth, async (req, res) => {
         AND pcm.id_ciclo_lectivo=(
           SELECT id_ciclo_lectivo FROM ciclo_lectivo WHERE anio=COALESCE($1::integer, (SELECT MAX(anio) FROM ciclo_lectivo)) ORDER BY anio DESC LIMIT 1
         )
-      LEFT JOIN curso c ON c.id_curso=pcm.id_curso
+      LEFT JOIN curso c ON c.id_curso=pcm.id_curso AND ($2<>'preceptor' OR EXISTS (
+        SELECT 1 FROM preceptor_curso_materia scope
+        WHERE scope.dni_preceptor=$3 AND scope.id_curso=pcm.id_curso
+          AND scope.codigo_materia=pcm.codigo_materia AND scope.id_ciclo_lectivo=pcm.id_ciclo_lectivo
+      ))
       LEFT JOIN especialidad e ON e.id_especialidad=c.id_especialidad
+      WHERE $2='admin' OR ($2='profesor' AND p.dni=$4)
+        OR ($2='preceptor' AND EXISTS (
+          SELECT 1 FROM preceptor_curso_materia scope
+          WHERE scope.dni_preceptor=$3 AND scope.id_curso=pcm.id_curso
+            AND scope.codigo_materia=pcm.codigo_materia AND scope.id_ciclo_lectivo=pcm.id_ciclo_lectivo
+        ))
       GROUP BY p.dni
       ORDER BY p.apellido, p.nombre
     `,
-      [cicloLectivo],
+      [cicloLectivo, role, preceptor, teacher],
     );
     res.json(rows);
   } catch (error) {
@@ -1463,21 +1392,18 @@ async function replaceTeacherAssignments(client, dni, assignments, cycleId) {
   }
 
   if (courseSubjectCount) {
-    const { rows } = await client.query(
-      `
-      SELECT id_curso, codigo_materia
-      FROM curso_materia
-      WHERE id_ciclo_lectivo=$1
-        AND id_curso=ANY($2::integer[])
-        AND codigo_materia=ANY($3::varchar[])
-    `,
-      [cycleId, selectedCourseIds, subjectCodes],
+    const pairs = assignments.flatMap(({ codigo_materia, cursos }) =>
+      cursos.map((id) => ({ id: Number(id), codigo_materia })),
     );
-    if (rows.length !== courseSubjectCount) {
-      throw new Error(
-        "Solo se pueden asignar cursos que tengan asignada la materia correspondiente",
-      );
-    }
+    const { rows } = await client.query(
+      `SELECT cm.id_curso, cm.codigo_materia
+       FROM unnest($2::integer[], $3::varchar[]) AS requested(id_curso, codigo_materia)
+       JOIN curso_materia cm USING (id_curso, codigo_materia)
+       WHERE cm.id_ciclo_lectivo=$1`,
+      [cycleId, pairs.map(({ id }) => id), pairs.map(({ codigo_materia }) => codigo_materia)],
+    );
+    if (rows.length !== courseSubjectCount)
+      throw new Error("Solo se pueden asignar cursos que tengan asignada la materia correspondiente");
   }
 
   await client.query(
@@ -2007,23 +1933,70 @@ app.get("/api/preceptores/:dni/permisos", auth, roles("admin"), async (req, res)
   res.json(rows.map((row) => row.codigo));
 });
 
+async function listPreceptorAssignments(dni, year) {
+  const cycleId = await getCycleId(pool, year);
+  const { rows } = await pool.query(
+    `SELECT id_curso, codigo_materia FROM preceptor_curso_materia
+     WHERE dni_preceptor=$1 AND id_ciclo_lectivo=$2 ORDER BY id_curso, codigo_materia`,
+    [dni, cycleId],
+  );
+  return rows;
+}
+
+app.get("/api/preceptor-asignaciones", auth, roles("preceptor"), async (req, res, next) => {
+  try {
+    res.json(await listPreceptorAssignments(req.user.dni_preceptor, requestedCycleYear(req)));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/preceptores/:dni/asignaciones", auth, roles("admin"), async (req, res, next) => {
+  try {
+    res.json(await listPreceptorAssignments(req.params.dni, requestedCycleYear(req)));
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.put("/api/preceptores/:dni/permisos", auth, roles("admin"), async (req, res) => {
-  const permisos = req.body?.permisos;
+  const { permisos, asignaciones } = req.body || {};
   if (!Array.isArray(permisos) || permisos.some((item) => !PRECEPTOR_PERMISSIONS.has(item)))
     return fail(res, 400, "La lista de permisos no es válida");
+  if (asignaciones !== undefined && (!Array.isArray(asignaciones) ||
+      asignaciones.some((item) => !item || !Number.isInteger(item.id_curso) || item.id_curso < 1 ||
+        !validSubjectCode(item.codigo_materia)) ||
+      new Set(asignaciones.map((item) => `${item.id_curso}/${item.codigo_materia}`)).size !== asignaciones.length)) {
+    return fail(res, 400, "Las asignaciones deben indicar un curso y una materia sin repetir");
+  }
   const unique = [...new Set(permisos)];
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
-    const exists = await client.query("SELECT 1 FROM preceptor WHERE dni=$1", [req.params.dni]);
+    const exists = await client.query("SELECT 1 FROM preceptor WHERE dni=$1 FOR UPDATE", [req.params.dni]);
     if (!exists.rows[0]) throw new Error("Preceptor no encontrado");
     await client.query("DELETE FROM preceptor_permiso WHERE dni_preceptor=$1", [req.params.dni]);
     for (const codigo of unique)
       await client.query("INSERT INTO preceptor_permiso (dni_preceptor, codigo) VALUES ($1,$2)", [req.params.dni, codigo]);
+    if (asignaciones !== undefined) {
+      const cycleId = await getCycleId(client, requestedCycleYear(req));
+      if (!cycleId) throw requestError(400, "No hay un ciclo lectivo seleccionado");
+      await client.query(
+        "DELETE FROM preceptor_curso_materia WHERE dni_preceptor=$1 AND id_ciclo_lectivo=$2",
+        [req.params.dni, cycleId],
+      );
+      await client.query(
+        `INSERT INTO preceptor_curso_materia (dni_preceptor,id_ciclo_lectivo,id_curso,codigo_materia)
+         SELECT $1,$2,id,codigo FROM unnest($3::integer[], $4::varchar[]) AS item(id,codigo)`,
+        [req.params.dni, cycleId, asignaciones.map((item) => item.id_curso), asignaciones.map((item) => item.codigo_materia)],
+      );
+    }
     await client.query("COMMIT");
     res.json({ permisos: unique });
   } catch (error) {
     await client.query("ROLLBACK");
+    if (error.code === "23503")
+      return fail(res, 400, "Solo se pueden asignar materias inscritas en el curso del ciclo lectivo");
     fail(res, error.message === "Preceptor no encontrado" ? 404 : 400, error.message || "No se pudieron actualizar los permisos");
   } finally { client.release(); }
 });
@@ -2031,6 +2004,8 @@ app.put("/api/preceptores/:dni/permisos", auth, roles("admin"), async (req, res)
 app.patch("/api/docentes/:dni/datos", auth, async (req, res) => {
   if (!(await hasPreceptorPermission(req.user, "docentes.editar_datos")))
     return fail(res, 403, "No tenés permiso para editar datos de docentes");
+  if (!(await hasPreceptorTeacherScope(req.user, req.params.dni, requestedCycleYear(req))))
+    return fail(res, 403, "El docente no pertenece a una asignación de preceptoría");
   const { nombre, apellido, email, telefono } = req.body || {};
   if (!String(nombre || "").trim() || !String(apellido || "").trim())
     return fail(res, 400, "El nombre y apellido son obligatorios");
@@ -2045,6 +2020,8 @@ app.patch("/api/docentes/:dni/datos", auth, async (req, res) => {
 app.patch("/api/docentes/:dni/estado", auth, async (req, res) => {
   if (!(await hasPreceptorPermission(req.user, "docentes.cambiar_estado")))
     return fail(res, 403, "No tenés permiso para cambiar el estado de docentes");
+  if (!(await hasPreceptorTeacherScope(req.user, req.params.dni, requestedCycleYear(req))))
+    return fail(res, 403, "El docente no pertenece a una asignación de preceptoría");
   const { estado } = req.body || {};
   if (!["Activo", "Baja"].includes(estado))
     return fail(res, 400, "Un preceptor solo puede establecer Activo o Baja");
@@ -2055,39 +2032,78 @@ app.patch("/api/docentes/:dni/estado", auth, async (req, res) => {
 });
 
 app.patch("/api/alumnos/:dni/datos", auth, async (req, res) => {
-  if (!(await hasPreceptorPermission(req.user, "alumnos.editar_datos")))
-    return fail(res, 403, "No tenés permiso para editar datos de alumnos");
-  const { nombre, apellido, email } = req.body || {};
-  if (!String(nombre || "").trim() || !String(apellido || "").trim())
-    return fail(res, 400, "El nombre y apellido son obligatorios");
-  const { rows } = await pool.query(
-    "UPDATE alumno SET nombre=$2, apellido=$3, email=$4 WHERE dni=$1 RETURNING dni",
-    [req.params.dni, String(nombre).trim(), String(apellido).trim(), String(email || "").trim() || null],
-  );
-  if (!rows[0]) return fail(res, 404, "Alumno no encontrado");
-  res.json({ ok: true });
+  const client = await pool.connect();
+  try {
+    if (!(await hasPreceptorPermission(req.user, "alumnos.editar_datos")))
+      return fail(res, 403, "No tenés permiso para editar datos de alumnos");
+    const body = req.body || {};
+    const { nombre, apellido, email } = body;
+    if (!String(nombre || "").trim() || !String(apellido || "").trim())
+      return fail(res, 400, "El nombre y apellido son obligatorios");
+    const address = readStudentAddress(body);
+    const details = readStudentDetails(body);
+    await client.query("BEGIN");
+    const { rows: [student] } = await client.query(
+      "SELECT id_domicilio FROM alumno WHERE dni=$1 FOR UPDATE", [req.params.dni],
+    );
+    if (!student) throw requestError(404, "Alumno no encontrado");
+    if (!(await hasPreceptorStudentScope(client, req.user, req.params.dni, requestedCycleYear(req))))
+      throw requestError(403, "El alumno no pertenece a un curso asignado");
+    await client.query(
+      "UPDATE alumno SET nombre=$2, apellido=$3, email=$4 WHERE dni=$1",
+      [req.params.dni, nombre.trim(), apellido.trim(), String(email || "").trim() || null],
+    );
+    await updateStudentAddress(client, req.params.dni, student.id_domicilio, address);
+    await updateStudentDetails(client, req.params.dni, details);
+    await client.query("COMMIT");
+    res.json({ ok: true });
+  } catch (error) {
+    await client.query("ROLLBACK");
+    if (error.status) return fail(res, error.status, error.message);
+    console.error(error);
+    fail(res, 500, "No se pudieron guardar los datos del alumno");
+  } finally {
+    client.release();
+  }
 });
 
 app.patch("/api/alumnos/:dni/estado", auth, async (req, res) => {
-  if (!(await hasPreceptorPermission(req.user, "alumnos.cambiar_estado")))
-    return fail(res, 403, "No tenés permiso para cambiar el estado de alumnos");
-  const { estado } = req.body || {};
-  if (!['Activo', 'Egresado', 'Baja', 'Suspendido', 'Transferido', 'No corresponde'].includes(estado))
-    return fail(res, 400, "El estado del alumno no es válido");
-  const { rows } = await pool.query("UPDATE alumno SET estado=$2 WHERE dni=$1 RETURNING dni", [req.params.dni, estado]);
-  if (!rows[0]) return fail(res, 404, "Alumno no encontrado");
-  res.json({ ok: true });
+  const client = await pool.connect();
+  try {
+    if (!(await hasPreceptorPermission(req.user, "alumnos.cambiar_estado")))
+      return fail(res, 403, "No tenés permiso para cambiar el estado de alumnos");
+    const { estado } = req.body || {};
+    if (!["Activo", "Egresado", "Baja", "Suspendido", "Transferido", "No corresponde"].includes(estado))
+      return fail(res, 400, "El estado del alumno no es válido");
+    await client.query("BEGIN");
+    const locked = await client.query("SELECT 1 FROM alumno WHERE dni=$1 FOR UPDATE", [req.params.dni]);
+    if (!locked.rowCount) throw requestError(404, "Alumno no encontrado");
+    if (!(await hasPreceptorStudentScope(client, req.user, req.params.dni, requestedCycleYear(req))))
+      throw requestError(403, "El alumno no pertenece a un curso asignado");
+    await client.query("UPDATE alumno SET estado=$2 WHERE dni=$1", [req.params.dni, estado]);
+    await client.query("COMMIT");
+    res.json({ ok: true });
+  } catch (error) {
+    await client.query("ROLLBACK");
+    if (error.status) return fail(res, error.status, error.message);
+    console.error(error);
+    fail(res, 500, "No se pudo cambiar el estado del alumno");
+  } finally {
+    client.release();
+  }
 });
 
 app.get("/api/cursos", auth, async (req, res) => {
   try {
+    const { rol: role, dni_preceptor: preceptor, dni_profesor: teacher } = req.user;
+    if (role === "alumno") return res.json([]);
     const cicloLectivo = Number(req.query.ciclo_lectivo) || null;
     const { rows } = await pool.query(
       `
       SELECT c.*,
              COUNT(DISTINCT a.dni)::int AS cantidad_alumnos,
          cl.anio AS ciclo_lectivo,
-             e.nombre AS especialidad,
+             e.nombre AS especialidad, p.nombre AS plan_estudio,
          t.id_turno AS turno_id,
              t.jornada AS turno,
              COALESCE(
@@ -2096,6 +2112,7 @@ app.get("/api/cursos", auth, async (req, res) => {
                '[]'::jsonb
              ) AS materias
       FROM curso c
+      JOIN plan_estudio p ON p.id_plan_estudio=c.id_plan_estudio
       LEFT JOIN especialidad e ON e.id_especialidad=c.id_especialidad
       JOIN ciclo_lectivo cl ON cl.id_ciclo_lectivo=c.id_ciclo_lectivo
       LEFT JOIN alumno_curso ac ON ac.id_curso=c.id_curso
@@ -2106,12 +2123,31 @@ app.get("/api/cursos", auth, async (req, res) => {
       LEFT JOIN turno t ON t.id_turno=ct.id_turno
       LEFT JOIN curso_materia cm ON cm.id_curso=c.id_curso
         AND cm.id_ciclo_lectivo=c.id_ciclo_lectivo
+        AND ($2='admin' OR (
+          $2='preceptor' AND EXISTS (
+            SELECT 1 FROM preceptor_curso_materia scope
+            WHERE scope.dni_preceptor=$3 AND scope.id_curso=cm.id_curso
+              AND scope.id_ciclo_lectivo=cm.id_ciclo_lectivo AND scope.codigo_materia=cm.codigo_materia
+          )
+        ) OR (
+          $2='profesor' AND EXISTS (
+            SELECT 1 FROM profesor_curso_materia scope
+            JOIN profesor titular ON titular.dni=scope.dni_profesor
+            JOIN profesor docente ON docente.dni=$4
+            WHERE scope.id_curso=cm.id_curso AND scope.id_ciclo_lectivo=cm.id_ciclo_lectivo
+              AND scope.codigo_materia=cm.codigo_materia AND (
+                (titular.dni=$4 AND titular.estado='Activo')
+                OR (titular.dni_suplente=$4 AND titular.estado='Licencia' AND docente.estado='Suplente')
+              )
+          )
+        ))
       LEFT JOIN materia m ON m.codigo=cm.codigo_materia
-      GROUP BY c.id_curso, cl.anio, e.nombre, t.id_turno, t.jornada
+      GROUP BY c.id_curso, cl.anio, e.nombre, p.nombre, t.id_turno, t.jornada
       HAVING cl.anio=COALESCE($1::integer, (SELECT MAX(anio) FROM ciclo_lectivo))
+        AND ($2='admin' OR COUNT(m.codigo)>0)
       ORDER BY c.anio, c.division
     `,
-      [cicloLectivo],
+      [cicloLectivo, role, preceptor, teacher],
     );
     res.json(rows);
   } catch (error) {
@@ -2120,222 +2156,134 @@ app.get("/api/cursos", auth, async (req, res) => {
   }
 });
 
-app.get(
-  "/api/docente-asignaciones",
-  auth,
-  roles("profesor"),
-  async (req, res) => {
-    if (!req.user.dni_profesor)
-      return fail(res, 403, "El usuario no tiene un docente asignado");
-    try {
-      const { rows: teacherRows } = await pool.query(
-        "SELECT estado FROM profesor WHERE dni=$1",
-        [req.user.dni_profesor],
-      );
-      if (!teacherRows[0] || teacherRows[0].estado === "Licencia")
-        return res.json([]);
-      const cycleId = await getCycleId(pool, requestedCycleYear(req));
-      if (!cycleId) return res.json([]);
-      const { rows } = await pool.query(
-        `
-      SELECT DISTINCT pcm.id_curso, pcm.codigo_materia
-      FROM profesor_curso_materia pcm
-      JOIN profesor titular ON titular.dni=pcm.dni_profesor
-      WHERE (
-          (titular.dni=$1 AND titular.estado='Activo')
-          OR (
-            titular.dni_suplente=$1
-            AND titular.estado='Licencia'
-            AND $3::varchar='Suplente'
-          )
-        )
-        AND pcm.id_ciclo_lectivo=$2
-      ORDER BY pcm.id_curso, pcm.codigo_materia
-    `,
-        [req.user.dni_profesor, cycleId, teacherRows[0].estado],
-      );
-      res.json(rows);
-    } catch (error) {
-      console.error(error);
-      fail(res, 500, "No se pudieron obtener las asignaciones del docente");
-    }
-  },
-);
+async function listTeacherAssignments(dni, cycleId) {
+  const { rows } = await pool.query(
+    `SELECT DISTINCT pcm.id_curso, pcm.codigo_materia
+     FROM profesor_curso_materia pcm
+     JOIN profesor titular ON titular.dni=pcm.dni_profesor
+     JOIN profesor docente ON docente.dni=$1
+     WHERE pcm.id_ciclo_lectivo=$2 AND (
+       (titular.dni=$1 AND titular.estado='Activo')
+       OR (titular.dni_suplente=$1 AND titular.estado='Licencia' AND docente.estado='Suplente')
+     ) ORDER BY pcm.id_curso, pcm.codigo_materia`,
+    [dni, cycleId],
+  );
+  return rows;
+}
 
-app.post("/api/cursos", auth, roles("admin"), async (req, res) => {
-  const anio = Number(req.body.anio);
-  const especialidad = anio <= 2 ? null : req.body.especialidad;
-  const turnoId =
-    req.body.turno_id == null || req.body.turno_id === ""
-      ? null
-      : Number(req.body.turno_id);
-
-  if (!Number.isInteger(anio) || anio < 1 || anio > 6) {
-    return fail(res, 400, "El año debe estar entre 1 y 6");
-  }
-  if (turnoId !== null && !Number.isInteger(turnoId)) {
-    return fail(res, 400, "El turno no es válido");
-  }
-
-  const client = await pool.connect();
+app.get("/api/docente-asignaciones", auth, roles("profesor"), async (req, res) => {
+  if (!req.user.dni_profesor) return fail(res, 403, "El usuario no tiene un docente asignado");
   try {
-    await client.query("BEGIN");
-    const specialtyResult = await client.query(
-      "SELECT id_especialidad FROM especialidad WHERE nombre=$1",
-      [especialidad],
-    );
-    if (anio >= 3 && !specialtyResult.rows[0])
-      throw new Error("La especialidad no es válida");
-    const idEspecialidad = specialtyResult.rows[0]?.id_especialidad || null;
-    const cycleId = await getCycleId(client, requestedCycleYear(req));
-    if (!cycleId) {
-      await client.query("ROLLBACK");
-      return fail(res, 400, "No hay un ciclo lectivo seleccionado");
-    }
-
-    const { rows } = await client.query(
-      `
-      INSERT INTO curso (anio, division, id_ciclo_lectivo, id_especialidad)
-      VALUES ($1,'1',$2,$3)
-      RETURNING *
-    `,
-      [anio, cycleId, idEspecialidad],
-    );
-
-    if (turnoId !== null) {
-      const turnoResult = await client.query(
-        "SELECT id_turno FROM turno WHERE id_turno=$1",
-        [turnoId],
-      );
-      if (!turnoResult.rows[0])
-        throw new Error("El turno no pertenece al ciclo lectivo seleccionado");
-      await client.query(
-        "INSERT INTO curso_turno (id_curso, id_turno) VALUES ($1,$2)",
-        [rows[0].id_curso, turnoId],
-      );
-    }
-    await replaceCourseSubjects(
-      client,
-      rows[0].id_curso,
-      cycleId,
-      req.body.materias === undefined ? [] : req.body.materias,
-    );
-    await client.query("COMMIT");
-    res.status(201).json({
-      ...rows[0],
-      especialidad,
-      turno_id: turnoId,
-      materias: req.body.materias || [],
-    });
+    const cycleId = await getCycleId(pool, requestedCycleYear(req));
+    res.json(await listTeacherAssignments(req.user.dni_profesor, cycleId));
   } catch (error) {
-    await client.query("ROLLBACK");
-    if (error.code === "23505")
-      return fail(res, 409, "Ya existe ese curso en el ciclo lectivo actual");
-    if (error.code === "23503")
-      return fail(res, 400, "El turno o la especialidad no existen");
     console.error(error);
-    fail(res, 400, "No se pudo crear el curso");
-  } finally {
-    client.release();
+    fail(res, 500, "No se pudieron obtener las asignaciones del docente");
   }
 });
 
-app.put("/api/cursos/:id", auth, roles("admin"), async (req, res) => {
-  const idCurso = Number(req.params.id);
-  const anio = Number(req.body.anio);
-  const especialidad = anio <= 2 ? null : req.body.especialidad;
-  const turnoId =
-    req.body.turno_id == null || req.body.turno_id === ""
-      ? null
-      : Number(req.body.turno_id);
-
-  if (
-    !Number.isInteger(idCurso) ||
-    !Number.isInteger(anio) ||
-    anio < 1 ||
-    anio > 6
-  ) {
-    return fail(res, 400, "El curso o el año no son válidos");
-  }
-  if (turnoId !== null && !Number.isInteger(turnoId)) {
-    return fail(res, 400, "El turno no es válido");
+async function saveCourse(req, res) {
+  const editing = req.params.id !== undefined;
+  const id = Number(req.params.id);
+  const year = Number(req.body.anio);
+  const division = typeof req.body.division === "string"
+    ? req.body.division.trim().toUpperCase()
+    : "";
+  const planId = Number(req.body.id_plan_estudio);
+  const shiftId = req.body.turno_id ? Number(req.body.turno_id) : null;
+  if ((editing && (!Number.isInteger(id) || id < 1)) ||
+      !/^[A-Z0-9]{1,10}$/.test(division) ||
+      (shiftId !== null && (!Number.isInteger(shiftId) || shiftId < 1))) {
+    return fail(res, 400, "Ingresá una división válida y revisá el curso y el turno");
   }
 
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
-    const specialtyResult = await client.query(
-      "SELECT id_especialidad FROM especialidad WHERE nombre=$1",
-      [especialidad],
-    );
-    if (anio >= 3 && !specialtyResult.rows[0])
-      throw new Error("La especialidad no es válida");
-    const idEspecialidad = specialtyResult.rows[0]?.id_especialidad || null;
     const cycleId = await getCycleId(client, requestedCycleYear(req));
-    if (!cycleId) {
-      await client.query("ROLLBACK");
-      return fail(res, 400, "No hay un ciclo lectivo seleccionado");
-    }
+    if (!cycleId) throw requestError(400, "No hay un ciclo lectivo seleccionado");
+    const plan = await lockPlan(client, planId);
+    if (!planAllowsYear(plan, year))
+      throw requestError(400, "El plan no corresponde al año elegido");
+    const specialty = plan.id_especialidad;
+    const codes = req.body.materias;
+    validateCourseSubjects(codes);
+    await validatePlanSubjects(client, planId, year, codes);
 
-    const { rows } = await client.query(
-      `
-      UPDATE curso
-      SET anio=$2, division='1', id_especialidad=$3
-      WHERE id_curso=$1 AND id_ciclo_lectivo=$4
-      RETURNING *
-    `,
-      [idCurso, anio, idEspecialidad, cycleId],
-    );
-    if (!rows[0]) {
-      await client.query("ROLLBACK");
-      return fail(res, 404, "Curso no encontrado en el ciclo lectivo actual");
-    }
-
-    if (turnoId === null) {
-      await client.query("DELETE FROM curso_turno WHERE id_curso=$1", [
-        idCurso,
-      ]);
+    let course;
+    if (editing) {
+      const { rows: [current] } = await client.query(
+        "SELECT * FROM curso WHERE id_curso=$1 AND id_ciclo_lectivo=$2 FOR UPDATE",
+        [id, cycleId],
+      );
+      if (!current) throw requestError(404, "Curso no encontrado en el ciclo lectivo");
+      if (current.anio !== year || current.id_especialidad !== specialty) {
+        const enrollment = await client.query(
+          "SELECT 1 FROM alumno_curso WHERE id_curso=$1 LIMIT 1",
+          [id],
+        );
+        if (enrollment.rowCount)
+          throw requestError(409, "El año y la especialidad de un curso con inscripciones no se pueden cambiar");
+      }
+      await client.query(
+        `DELETE FROM curso_materia WHERE id_curso=$1 AND id_ciclo_lectivo=$2
+          AND NOT (codigo_materia=ANY($3::varchar[]))`,
+        [id, cycleId, codes],
+      );
+      const updated = await client.query(
+        `UPDATE curso SET anio=$2, division=$3, id_especialidad=$4, id_plan_estudio=$5
+         WHERE id_curso=$1 RETURNING *`,
+        [id, year, division, specialty, planId],
+      );
+      course = updated.rows[0];
     } else {
-      const turnoResult = await client.query(
-        "SELECT id_turno FROM turno WHERE id_turno=$1",
-        [turnoId],
+      const created = await client.query(
+        `INSERT INTO curso (anio, division, id_ciclo_lectivo, id_especialidad, id_plan_estudio)
+         VALUES ($1,$2,$3,$4,$5) RETURNING *`,
+        [year, division, cycleId, specialty, planId],
       );
-      if (!turnoResult.rows[0])
-        throw new Error("El turno no pertenece al ciclo lectivo seleccionado");
+      course = created.rows[0];
+    }
+
+    if (shiftId === null) {
+      await client.query("DELETE FROM curso_turno WHERE id_curso=$1", [course.id_curso]);
+    } else {
       await client.query(
-        `
-        INSERT INTO curso_turno (id_curso, id_turno)
-        VALUES ($1,$2)
-        ON CONFLICT (id_curso) DO UPDATE SET id_turno=EXCLUDED.id_turno
-      `,
-        [idCurso, turnoId],
+        `INSERT INTO curso_turno (id_curso, id_turno) VALUES ($1,$2)
+         ON CONFLICT (id_curso) DO UPDATE SET id_turno=EXCLUDED.id_turno`,
+        [course.id_curso, shiftId],
       );
     }
-    await replaceCourseSubjects(
-      client,
-      idCurso,
-      cycleId,
-      req.body.materias === undefined ? [] : req.body.materias,
+    await addCourseSubjects(client, course, codes);
+    const specialtyResult = await client.query(
+      "SELECT nombre FROM especialidad WHERE id_especialidad=$1", [specialty],
     );
     await client.query("COMMIT");
-    res.json({
-      ...rows[0],
-      especialidad,
-      turno_id: turnoId,
-      materias: req.body.materias || [],
+    res.status(editing ? 200 : 201).json({
+      ...course,
+      especialidad: specialtyResult.rows[0]?.nombre || null,
+      plan_estudio: plan.nombre,
+      turno_id: shiftId,
+      materias: codes,
     });
   } catch (error) {
     await client.query("ROLLBACK");
+    if (error.status) return fail(res, error.status, error.message);
     if (error.code === "23505")
-      return fail(res, 409, "Ya existe ese curso en el ciclo lectivo actual");
-    if (error.code === "23503")
-      return fail(res, 400, "El turno o la especialidad no existen");
+      return fail(res, 409, "Ya existe esa división para el año y especialidad en el ciclo lectivo");
+    if (error.code === "23503") {
+      if (error.table === "curso_turno") return fail(res, 400, "El turno no existe");
+      return fail(res, 409, "No se puede quitar una materia con calificaciones o personal asignado");
+    }
     console.error(error);
-    fail(res, 400, "No se pudo modificar el curso");
+    fail(res, 500, "No se pudo guardar el curso");
   } finally {
     client.release();
   }
-});
+}
+
+app.post("/api/cursos", auth, roles("admin"), saveCourse);
+app.put("/api/cursos/:id", auth, roles("admin"), saveCourse);
 
 app.delete("/api/cursos/:id", auth, roles("admin"), async (req, res) => {
   const idCurso = Number(req.params.id);
@@ -2360,7 +2308,7 @@ app.delete("/api/cursos/:id", auth, roles("admin"), async (req, res) => {
       return fail(
         res,
         409,
-        "No se puede eliminar un curso con alumnos o notas asociadas",
+        "No se puede eliminar un curso con alumnos, calificaciones o personal asignado",
       );
     }
     console.error(error);
@@ -2379,6 +2327,133 @@ app.get("/api/ciclos-lectivos", auth, async (_req, res) => {
   } catch (error) {
     console.error(error);
     fail(res, 500, "No se pudieron obtener los ciclos lectivos");
+  }
+});
+
+app.get("/api/planes-estudio", auth, roles("admin"), async (_req, res) => {
+  try {
+    const { rows } = await pool.query(`
+      SELECT p.id_plan_estudio, p.nombre, p.ciclo, p.id_especialidad, e.nombre AS especialidad,
+             COALESCE(json_agg(json_build_object(
+               'anio', pm.anio, 'codigo', m.codigo, 'nombre', m.nombre
+             ) ORDER BY pm.anio, m.nombre) FILTER (WHERE pm.codigo_materia IS NOT NULL), '[]'::json) AS materias
+      FROM plan_estudio p
+      LEFT JOIN especialidad e ON e.id_especialidad=p.id_especialidad
+      LEFT JOIN plan_estudio_materia pm ON pm.id_plan_estudio=p.id_plan_estudio
+      LEFT JOIN materia m ON m.codigo=pm.codigo_materia
+      GROUP BY p.id_plan_estudio, e.nombre
+      ORDER BY p.ciclo, p.nombre
+    `);
+    res.json(rows);
+  } catch (error) {
+    console.error(error);
+    fail(res, 500, "No se pudieron obtener los planes de estudio");
+  }
+});
+
+app.get("/api/especialidades", auth, roles("admin"), async (_req, res) => {
+  try {
+    const { rows } = await pool.query("SELECT * FROM especialidad ORDER BY nombre");
+    res.json(rows);
+  } catch (error) {
+    console.error(error);
+    fail(res, 500, "No se pudieron obtener las especialidades");
+  }
+});
+
+async function saveStudyPlan(req, res) {
+  const editing = req.params.id !== undefined;
+  const id = Number(req.params.id);
+  const name = typeof req.body.nombre === "string" ? req.body.nombre.trim() : "";
+  const cycle = req.body.ciclo;
+  const specialty = cycle === "Superior" ? Number(req.body.id_especialidad) : null;
+  const entries = req.body.materias;
+  if ((editing && (!Number.isInteger(id) || id < 1)) || !name || name.length > 100 ||
+      !["Básico", "Superior"].includes(cycle) ||
+      (cycle === "Superior" && (!Number.isInteger(specialty) || specialty < 1)) ||
+      !Array.isArray(entries) ||
+      entries.some((entry) => !entry || !planAllowsYear({ ciclo: cycle }, entry.anio) || !validSubjectCode(entry.codigo))) {
+    return fail(res, 400, "Revisá el nombre, la especialidad y los años de las materias del plan");
+  }
+  if (new Set(entries.map(({ anio, codigo }) => `${anio}/${codigo}`)).size !== entries.length)
+    return fail(res, 400, "No se puede repetir una materia en el mismo año del plan");
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    let savedId;
+    if (editing) {
+      const { rows: [current] } = await client.query(
+        "SELECT * FROM plan_estudio WHERE id_plan_estudio=$1 FOR UPDATE", [id],
+      );
+      if (!current) throw requestError(404, "Plan de estudio no encontrado");
+      if (current.ciclo !== cycle || current.id_especialidad !== specialty) {
+        const courses = await client.query("SELECT 1 FROM curso WHERE id_plan_estudio=$1 LIMIT 1", [id]);
+        if (courses.rowCount)
+          throw requestError(409, "Creá otro plan para cambiar el ciclo o la especialidad de un plan en uso");
+      }
+      await client.query(
+        "UPDATE plan_estudio SET nombre=$2, ciclo=$3, id_especialidad=$4 WHERE id_plan_estudio=$1",
+        [id, name, cycle, specialty],
+      );
+      savedId = id;
+    } else {
+      const { rows } = await client.query(
+        "INSERT INTO plan_estudio (nombre,ciclo,id_especialidad) VALUES ($1,$2,$3) RETURNING id_plan_estudio",
+        [name, cycle, specialty],
+      );
+      savedId = rows[0].id_plan_estudio;
+    }
+    const years = entries.map((entry) => entry.anio);
+    const codes = entries.map((entry) => entry.codigo);
+    const catalog = await client.query("SELECT codigo FROM materia WHERE codigo=ANY($1::varchar[])", [codes]);
+    if (catalog.rowCount !== new Set(codes).size)
+      throw requestError(400, "Una o más materias del plan no existen");
+    if (editing) {
+      await client.query(
+        `DELETE FROM plan_estudio_materia pm WHERE id_plan_estudio=$1 AND NOT EXISTS (
+           SELECT 1 FROM unnest($2::integer[], $3::varchar[]) AS item(anio,codigo)
+           WHERE item.anio=pm.anio AND item.codigo=pm.codigo_materia
+         )`,
+        [savedId, years, codes],
+      );
+    }
+    await client.query(
+      `INSERT INTO plan_estudio_materia (id_plan_estudio, anio, codigo_materia)
+       SELECT $1, anio, codigo FROM unnest($2::integer[], $3::varchar[]) AS item(anio,codigo)
+       ON CONFLICT DO NOTHING`,
+      [savedId, years, codes],
+    );
+    await client.query("COMMIT");
+    res.status(editing ? 200 : 201).json({ id_plan_estudio: savedId });
+  } catch (error) {
+    await client.query("ROLLBACK");
+    if (error.status) return fail(res, error.status, error.message);
+    if (error.code === "23505") return fail(res, 409, "Ya existe un plan con ese nombre");
+    if (error.code === "23503") {
+      if (error.table === "plan_estudio") return fail(res, 400, "La especialidad no existe");
+      return fail(res, 409, "La materia está en uso. Creá una versión del plan para cambiar la grilla");
+    }
+    console.error(error);
+    fail(res, 500, "No se pudo guardar el plan de estudio");
+  } finally {
+    client.release();
+  }
+}
+
+app.post("/api/planes-estudio", auth, roles("admin"), saveStudyPlan);
+app.put("/api/planes-estudio/:id", auth, roles("admin"), saveStudyPlan);
+app.delete("/api/planes-estudio/:id", auth, roles("admin"), async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id < 1) return fail(res, 400, "Plan de estudio no válido");
+  try {
+    const result = await pool.query("DELETE FROM plan_estudio WHERE id_plan_estudio=$1", [id]);
+    if (!result.rowCount) return fail(res, 404, "Plan de estudio no encontrado");
+    res.json({ ok: true });
+  } catch (error) {
+    if (error.code === "23503") return fail(res, 409, "El plan está asignado a un curso");
+    console.error(error);
+    fail(res, 500, "No se pudo eliminar el plan de estudio");
   }
 });
 
@@ -2465,11 +2540,11 @@ app.post("/api/ciclos-lectivos", auth, roles("admin"), async (req, res) => {
       for (const curso of sourceCourses) {
         const clonedCourse = await client.query(
           `
-          INSERT INTO curso (anio, division, id_ciclo_lectivo, id_especialidad)
-          VALUES ($1,$2,$3,$4)
+          INSERT INTO curso (anio, division, id_ciclo_lectivo, id_especialidad, id_plan_estudio)
+          VALUES ($1,$2,$3,$4,$5)
           RETURNING id_curso
         `,
-          [curso.anio, curso.division, targetCycleId, curso.id_especialidad],
+          [curso.anio, curso.division, targetCycleId, curso.id_especialidad, curso.id_plan_estudio],
         );
         const newCourseId = clonedCourse.rows[0].id_curso;
         courseIds.set(curso.id_curso, newCourseId);
@@ -2482,8 +2557,8 @@ app.post("/api/ciclos-lectivos", auth, roles("admin"), async (req, res) => {
         }
         await client.query(
           `
-          INSERT INTO curso_materia (id_curso, codigo_materia, id_ciclo_lectivo)
-          SELECT $1, codigo_materia, $3
+          INSERT INTO curso_materia (id_curso, codigo_materia, id_ciclo_lectivo, id_plan_estudio, anio)
+          SELECT $1, codigo_materia, $3, id_plan_estudio, anio
           FROM curso_materia
           WHERE id_curso=$2 AND id_ciclo_lectivo=$4
         `,
@@ -2526,6 +2601,14 @@ app.post("/api/ciclos-lectivos", auth, roles("admin"), async (req, res) => {
           );
         }
       }
+      for (const [sourceId, newId] of courseIds) {
+        await client.query(
+          `INSERT INTO preceptor_curso_materia (dni_preceptor,id_curso,codigo_materia,id_ciclo_lectivo)
+           SELECT dni_preceptor,$1,codigo_materia,$2 FROM preceptor_curso_materia
+           WHERE id_curso=$3 AND id_ciclo_lectivo=$4`,
+          [newId, targetCycleId, sourceId, sourceCycleId],
+        );
+      }
     }
 
     await client.query("COMMIT");
@@ -2567,7 +2650,8 @@ app.delete(
       SELECT
         EXISTS(SELECT 1 FROM curso WHERE id_ciclo_lectivo=$1) AS tiene_cursos,
         EXISTS(SELECT 1 FROM alumno_curso WHERE id_ciclo_lectivo=$1) AS tiene_inscripciones,
-        EXISTS(SELECT 1 FROM profesor_curso_materia WHERE id_ciclo_lectivo=$1) AS tiene_asignaciones,
+        (EXISTS(SELECT 1 FROM profesor_curso_materia WHERE id_ciclo_lectivo=$1)
+          OR EXISTS(SELECT 1 FROM preceptor_curso_materia WHERE id_ciclo_lectivo=$1)) AS tiene_asignaciones,
         EXISTS(SELECT 1 FROM nota WHERE id_ciclo_lectivo=$1)
           OR EXISTS(SELECT 1 FROM nota_individual WHERE id_ciclo_lectivo=$1) AS tiene_notas
     `,
@@ -2637,10 +2721,26 @@ app.delete("/api/turnos/:id", auth, roles("admin"), fixedTurnosError);
 app.get("/api/materias", auth, async (req, res) => {
   try {
     const cycleId = await getCycleId(pool, requestedCycleYear(req));
-    if (!cycleId) return res.json([]);
+    if (!cycleId || req.user.rol === "alumno") return res.json([]);
+    if (req.user.rol === "preceptor" || req.user.rol === "profesor") {
+      const assignments = req.user.rol === "preceptor"
+        ? await listPreceptorAssignments(req.user.dni_preceptor, requestedCycleYear(req))
+        : await listTeacherAssignments(req.user.dni_profesor, cycleId);
+      const { rows } = await pool.query(
+        "SELECT codigo, nombre, descripcion FROM materia WHERE codigo=ANY($1::varchar[]) ORDER BY nombre",
+        [assignments.map((item) => item.codigo_materia)],
+      );
+      return res.json(rows);
+    }
     const { rows } = await pool.query(
       `
       SELECT m.codigo, m.nombre, m.descripcion,
+             COALESCE((
+               SELECT json_agg(json_build_object('id_plan_estudio', p.id_plan_estudio, 'plan', p.nombre, 'anio', pm.anio)
+                               ORDER BY p.nombre, pm.anio)
+               FROM plan_estudio_materia pm JOIN plan_estudio p USING (id_plan_estudio)
+               WHERE pm.codigo_materia=m.codigo
+             ), '[]'::json) AS planes,
              COALESCE(
                (
                  SELECT json_agg(json_build_object(
@@ -2775,6 +2875,10 @@ app.post("/api/materias", auth, roles("admin"), async (req, res) => {
       await client.query("ROLLBACK");
       return fail(res, 400, "No hay un ciclo lectivo seleccionado");
     }
+    const plan = await lockPlan(client, Number(req.body.id_plan_estudio));
+    const year = Number(req.body.anio);
+    if (!planAllowsYear(plan, year))
+      throw requestError(400, "El año no corresponde al plan seleccionado");
     await client.query(
       "SELECT pg_advisory_xact_lock(hashtextextended(LOWER(BTRIM($1)), 0))",
       [nombre],
@@ -2790,37 +2894,30 @@ app.post("/api/materias", auth, roles("admin"), async (req, res) => {
     `,
       [nombre],
     );
-    if (existingName[0]) {
-      await client.query(
-        `
-        INSERT INTO ciclo_materia (id_ciclo_lectivo, codigo_materia)
-        VALUES ($1,$2)
-        ON CONFLICT (id_ciclo_lectivo, codigo_materia) DO NOTHING
-      `,
-        [cycleId, existingName[0].codigo],
+    let subject = existingName[0];
+    const reused = Boolean(subject);
+    if (!subject) {
+      const { rows } = await client.query(
+        "INSERT INTO materia (codigo, nombre, descripcion) VALUES ($1,$2,$3) RETURNING *",
+        [codigo, nombre, descripcion],
       );
-      await client.query("COMMIT");
-      return res.json({ ...existingName[0], profesores: [], reutilizada: true });
+      subject = rows[0];
     }
-    const { rows } = await client.query(
-      `
-      INSERT INTO materia (codigo, nombre, descripcion)
-      VALUES ($1,$2,$3)
-      RETURNING codigo, nombre, descripcion
-    `,
-      [codigo, nombre, descripcion],
+    await client.query(
+      `INSERT INTO plan_estudio_materia (id_plan_estudio, anio, codigo_materia)
+       VALUES ($1,$2,$3) ON CONFLICT DO NOTHING`,
+      [plan.id_plan_estudio, year, subject.codigo],
     );
     await client.query(
-      `
-      INSERT INTO ciclo_materia (id_ciclo_lectivo, codigo_materia)
-      VALUES ($1,$2)
-    `,
-      [cycleId, rows[0].codigo],
+      `INSERT INTO ciclo_materia (id_ciclo_lectivo, codigo_materia)
+       VALUES ($1,$2) ON CONFLICT DO NOTHING`,
+      [cycleId, subject.codigo],
     );
     await client.query("COMMIT");
-    res.status(201).json({ ...rows[0], profesores: [] });
+    res.status(reused ? 200 : 201).json({ ...subject, profesores: [], reutilizada: reused });
   } catch (error) {
     await client.query("ROLLBACK");
+    if (error.status) return fail(res, error.status, error.message);
     if (error.code === "23505")
       return fail(res, 409, "Ya existe una materia con ese código");
     console.error(error);
@@ -2940,7 +3037,10 @@ app.delete("/api/materias/:codigo", auth, roles("admin"), async (req, res) => {
       "SELECT 1 FROM ciclo_materia WHERE codigo_materia=$1 LIMIT 1",
       [codigo],
     );
-    const eliminada = remainingAssignments.rowCount === 0;
+    const curricularAssignments = await client.query(
+      "SELECT 1 FROM plan_estudio_materia WHERE codigo_materia=$1 LIMIT 1", [codigo],
+    );
+    const eliminada = remainingAssignments.rowCount === 0 && curricularAssignments.rowCount === 0;
     if (eliminada) {
       await client.query("DELETE FROM materia WHERE codigo=$1", [codigo]);
     }
@@ -2962,7 +3062,7 @@ app.delete("/api/materias/:codigo", auth, roles("admin"), async (req, res) => {
   }
 });
 
-app.get("/api/notas", auth, async (req, res) => {
+app.get("/api/notas", auth, roles("admin", "profesor", "preceptor"), async (req, res) => {
   try {
     const { curso, materia } = req.query;
     const cicloLectivo = Number(req.query.ciclo_lectivo) || null;
@@ -3008,6 +3108,15 @@ app.get("/api/notas", auth, async (req, res) => {
           AND pcm.id_curso=ac.id_curso
           AND pcm.id_ciclo_lectivo=ac.id_ciclo_lectivo
           AND pcm.codigo_materia=n.codigo_materia
+      )`;
+    }
+
+    if (req.user.rol === "preceptor") {
+      params.push(req.user.dni_preceptor);
+      where += ` AND EXISTS (
+        SELECT 1 FROM preceptor_curso_materia scope
+        WHERE scope.dni_preceptor=$${params.length} AND scope.id_curso=ac.id_curso
+          AND scope.id_ciclo_lectivo=ac.id_ciclo_lectivo AND scope.codigo_materia=n.codigo_materia
       )`;
     }
 
@@ -3068,6 +3177,7 @@ app.post(
   async (req, res) => {
     const {
       dni_alumno,
+      id_curso: courseId,
       codigo_materia,
       tipo_evaluacion,
       calificacion,
@@ -3084,7 +3194,7 @@ app.post(
     ) {
       return fail(res, 400, "Faltan datos de la nota");
     }
-    if (Number(calificacion) < 1 || Number(calificacion) > 10) {
+    if (!Number.isFinite(Number(calificacion)) || Number(calificacion) < 1 || Number(calificacion) > 10) {
       return fail(res, 400, "La calificación debe estar entre 1 y 10");
     }
 
@@ -3097,10 +3207,11 @@ app.post(
       JOIN ciclo_lectivo cl ON cl.id_ciclo_lectivo=ac.id_ciclo_lectivo
       WHERE ac.dni_alumno=$1
         AND ac.fecha_baja IS NULL
+        AND ($3::integer IS NULL OR ac.id_curso=$3)
         AND cl.anio=COALESCE($2::integer, (SELECT MAX(anio) FROM ciclo_lectivo))
       LIMIT 1
     `,
-        [dni_alumno, requestedCycleYear(req) || Number(ciclo_lectivo) || null],
+        [dni_alumno, requestedCycleYear(req) || Number(ciclo_lectivo) || null, courseId ?? null],
       );
       if (!enrollment.rows[0]) {
         return fail(
@@ -3111,8 +3222,7 @@ app.post(
       }
       const { id_curso, id_ciclo_lectivo } = enrollment.rows[0];
       if (
-        req.user.rol === "profesor" &&
-        !(await canManageIndividualGrade(
+        !(await canManageGrade(
           req,
           { id_curso, id_ciclo_lectivo },
           codigo_materia,
@@ -3121,7 +3231,7 @@ app.post(
         return fail(
           res,
           403,
-          "No tenés asignada esa materia para este curso o estás en licencia",
+          "No tenés permiso para calificar esta materia en el curso",
         );
       }
       const { rows } = await pool.query(
@@ -3129,9 +3239,8 @@ app.post(
       INSERT INTO nota
         (dni_alumno,id_curso,id_ciclo_lectivo,codigo_materia,tipo_evaluacion,calificacion,observacion,fecha,dni_profesor)
       VALUES ($1,$8,$9,$2,$3,$4,$5,COALESCE($6,CURRENT_DATE),$7)
-      ON CONFLICT (dni_alumno,codigo_materia,tipo_evaluacion,id_ciclo_lectivo)
+      ON CONFLICT (dni_alumno,id_curso,codigo_materia,tipo_evaluacion,id_ciclo_lectivo)
       DO UPDATE SET
-        id_curso=EXCLUDED.id_curso,
         calificacion=EXCLUDED.calificacion,
         observacion=EXCLUDED.observacion,
         fecha=EXCLUDED.fecha,
@@ -3176,7 +3285,7 @@ app.delete(
   auth,
   roles("admin", "profesor", "preceptor"),
   async (req, res) => {
-    const { dni_alumno, codigo_materia, tipo_evaluacion, ciclo_lectivo } =
+    const { dni_alumno, id_curso: courseId, codigo_materia, tipo_evaluacion, ciclo_lectivo } =
       req.body;
     if (!dni_alumno || !codigo_materia || !tipo_evaluacion) {
       return fail(res, 400, "Faltan datos para eliminar la nota");
@@ -3190,10 +3299,11 @@ app.delete(
       JOIN ciclo_lectivo cl ON cl.id_ciclo_lectivo=ac.id_ciclo_lectivo
       WHERE ac.dni_alumno=$1
         AND ac.fecha_baja IS NULL
+        AND ($3::integer IS NULL OR ac.id_curso=$3)
         AND cl.anio=COALESCE($2::integer, (SELECT MAX(anio) FROM ciclo_lectivo))
       LIMIT 1
     `,
-        [dni_alumno, requestedCycleYear(req) || Number(ciclo_lectivo) || null],
+        [dni_alumno, requestedCycleYear(req) || Number(ciclo_lectivo) || null, courseId ?? null],
       );
       if (!enrollment.rows[0]) {
         return fail(
@@ -3205,8 +3315,7 @@ app.delete(
       const { id_curso, id_ciclo_lectivo } = enrollment.rows[0];
 
       if (
-        req.user.rol === "profesor" &&
-        !(await canManageIndividualGrade(
+        !(await canManageGrade(
           req,
           { id_curso, id_ciclo_lectivo },
           codigo_materia,
@@ -3215,7 +3324,7 @@ app.delete(
         return fail(
           res,
           403,
-          "No tenés asignada esa materia para este curso o estás en licencia",
+          "No tenés permiso para calificar esta materia en el curso",
         );
       }
 
@@ -3311,8 +3420,17 @@ async function getNotaIndividualEnrollment(dniAlumno, idCurso, cycleYear) {
   return rows[0];
 }
 
-async function canManageIndividualGrade(req, enrollment, codigoMateria) {
-  if (req.user.rol !== "profesor") return true;
+async function canManageGrade(req, enrollment, codigoMateria, write = true) {
+  if (req.user.rol === "admin") return true;
+  if (req.user.rol === "preceptor") {
+    if (write && !(await hasPreceptorPermission(req.user, "notas.editar"))) return false;
+    const result = await pool.query(
+      `SELECT 1 FROM preceptor_curso_materia
+       WHERE dni_preceptor=$1 AND id_curso=$2 AND id_ciclo_lectivo=$3 AND codigo_materia=$4`,
+      [req.user.dni_preceptor, enrollment.id_curso, enrollment.id_ciclo_lectivo, codigoMateria],
+    );
+    return result.rowCount > 0;
+  }
   if (!req.user.dni_profesor) return false;
   const { rows } = await pool.query(
     `
@@ -3375,7 +3493,7 @@ app.get(
           404,
           "El alumno no tiene curso asignado en el ciclo lectivo actual",
         );
-      if (!(await canManageIndividualGrade(req, enrollment, materia))) {
+      if (!(await canManageGrade(req, enrollment, materia, false))) {
         return fail(res, 403, "No tenés asignada esa materia para este curso");
       }
       const { rows } = await pool.query(
@@ -3420,7 +3538,7 @@ app.post(
           "El alumno no tiene curso asignado en el ciclo lectivo actual",
         );
       if (
-        !(await canManageIndividualGrade(
+        !(await canManageGrade(
           req,
           enrollment,
           req.body.codigo_materia,
@@ -3488,7 +3606,7 @@ app.put(
           "El alumno no tiene curso asignado en el ciclo lectivo actual",
         );
       if (
-        !(await canManageIndividualGrade(
+        !(await canManageGrade(
           req,
           enrollment,
           req.body.codigo_materia,
@@ -3569,7 +3687,7 @@ app.delete(
           400,
           "El alumno no tiene curso asignado en el ciclo lectivo actual",
         );
-      if (!(await canManageIndividualGrade(req, enrollment, codigo_materia))) {
+      if (!(await canManageGrade(req, enrollment, codigo_materia))) {
         return fail(res, 403, "No tenés asignada esa materia para este curso");
       }
       const { rows } = await pool.query(
@@ -3651,6 +3769,7 @@ app.get("/api/notificaciones", auth, async (req, res) => {
       );
       return res.json(rows);
     }
+    if (req.user.rol !== "admin") return res.json([]);
     const { rows } = await pool.query(
       `
       SELECT n.id_nota, a.nombre, a.apellido, m.nombre AS materia,

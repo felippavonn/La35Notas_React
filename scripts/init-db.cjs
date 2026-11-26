@@ -1,8 +1,13 @@
+require("dotenv").config();
+
 const fs = require("fs");
 const path = require("path");
 const { Pool } = require("pg");
 
 async function main() {
+  if (!process.env.DATABASE_URL) {
+    throw new Error("Configurá DATABASE_URL antes de inicializar la base");
+  }
   const sql = fs.readFileSync(
     path.join(__dirname, "..", "database/schema.sql"),
     "utf8",

@@ -22,6 +22,22 @@ CREATE TABLE especialidad (
 
 INSERT INTO especialidad (nombre) VALUES ('Automotores'), ('Computación');
 
+CREATE TABLE plan_estudio (
+  id_plan_estudio SERIAL PRIMARY KEY,
+  nombre VARCHAR(100) NOT NULL UNIQUE,
+  ciclo VARCHAR(20) NOT NULL CHECK (ciclo IN ('Básico', 'Superior')),
+  id_especialidad INTEGER REFERENCES especialidad(id_especialidad),
+  CHECK (
+    (ciclo='Básico' AND id_especialidad IS NULL)
+    OR (ciclo='Superior' AND id_especialidad IS NOT NULL)
+  )
+);
+
+INSERT INTO plan_estudio (nombre, ciclo, id_especialidad) VALUES
+  ('Ciclo Básico', 'Básico', NULL),
+  ('Ciclo Superior — Automotores', 'Superior', (SELECT id_especialidad FROM especialidad WHERE nombre='Automotores')),
+  ('Ciclo Superior — Computación', 'Superior', (SELECT id_especialidad FROM especialidad WHERE nombre='Computación'));
+
 CREATE TABLE materia (
   codigo VARCHAR(20) PRIMARY KEY,
   nombre VARCHAR(100) NOT NULL,
@@ -55,21 +71,30 @@ CREATE TABLE ciclo_materia (
   PRIMARY KEY (id_ciclo_lectivo, codigo_materia)
 );
 
+CREATE TABLE plan_estudio_materia (
+  id_plan_estudio INTEGER NOT NULL REFERENCES plan_estudio(id_plan_estudio) ON DELETE CASCADE,
+  anio INTEGER NOT NULL CHECK (anio BETWEEN 1 AND 6),
+  codigo_materia VARCHAR(20) NOT NULL REFERENCES materia(codigo) ON DELETE CASCADE,
+  PRIMARY KEY (id_plan_estudio, anio, codigo_materia)
+);
+
 CREATE TABLE curso (
   id_curso SERIAL PRIMARY KEY,
   anio INTEGER NOT NULL CHECK (anio BETWEEN 1 AND 6),
-  division VARCHAR(10) NOT NULL,
+  division VARCHAR(10) NOT NULL CHECK (division <> '' AND division = UPPER(BTRIM(division))),
   id_ciclo_lectivo INTEGER NOT NULL REFERENCES ciclo_lectivo(id_ciclo_lectivo) ON DELETE CASCADE,
   id_especialidad INTEGER REFERENCES especialidad(id_especialidad),
+  id_plan_estudio INTEGER NOT NULL REFERENCES plan_estudio(id_plan_estudio),
   UNIQUE (id_curso, id_ciclo_lectivo),
+  UNIQUE (id_curso, id_ciclo_lectivo, id_plan_estudio, anio),
   CHECK (
     (anio IN (1, 2) AND id_especialidad IS NULL)
     OR (anio BETWEEN 3 AND 6 AND id_especialidad IS NOT NULL)
   )
 );
 
-CREATE UNIQUE INDEX idx_curso_anio_especialidad_ciclo
-  ON curso(anio, id_especialidad, id_ciclo_lectivo)
+CREATE UNIQUE INDEX idx_curso_anio_division_especialidad_ciclo
+  ON curso(anio, division, id_especialidad, id_ciclo_lectivo)
   WHERE id_especialidad IS NOT NULL;
 
 CREATE UNIQUE INDEX idx_curso_basico_anio_division_ciclo
@@ -85,9 +110,16 @@ CREATE TABLE curso_materia (
   id_curso INTEGER NOT NULL,
   codigo_materia VARCHAR(20) NOT NULL REFERENCES materia(codigo),
   id_ciclo_lectivo INTEGER NOT NULL,
+  id_plan_estudio INTEGER NOT NULL,
+  anio INTEGER NOT NULL,
   PRIMARY KEY (id_curso, codigo_materia, id_ciclo_lectivo),
-  FOREIGN KEY (id_curso, id_ciclo_lectivo)
-    REFERENCES curso(id_curso, id_ciclo_lectivo) ON DELETE CASCADE
+  FOREIGN KEY (id_curso, id_ciclo_lectivo, id_plan_estudio, anio)
+    REFERENCES curso(id_curso, id_ciclo_lectivo, id_plan_estudio, anio)
+    ON UPDATE CASCADE ON DELETE CASCADE,
+  FOREIGN KEY (id_plan_estudio, anio, codigo_materia)
+    REFERENCES plan_estudio_materia(id_plan_estudio, anio, codigo_materia),
+  FOREIGN KEY (id_ciclo_lectivo, codigo_materia)
+    REFERENCES ciclo_materia(id_ciclo_lectivo, codigo_materia) DEFERRABLE INITIALLY DEFERRED
 );
 
 CREATE TABLE domicilio (
@@ -199,10 +231,23 @@ CREATE TABLE preceptor_permiso (
   dni_preceptor VARCHAR(20) NOT NULL REFERENCES preceptor(dni) ON DELETE CASCADE,
   codigo VARCHAR(40) NOT NULL CHECK (codigo IN (
     'alumnos.editar_datos', 'alumnos.cambiar_estado',
-    'docentes.editar_datos', 'docentes.cambiar_estado'
+    'docentes.editar_datos', 'docentes.cambiar_estado', 'notas.editar'
   )),
   PRIMARY KEY (dni_preceptor, codigo)
 );
+
+CREATE TABLE preceptor_curso_materia (
+  dni_preceptor VARCHAR(20) NOT NULL REFERENCES preceptor(dni) ON DELETE CASCADE,
+  id_curso INTEGER NOT NULL,
+  codigo_materia VARCHAR(20) NOT NULL,
+  id_ciclo_lectivo INTEGER NOT NULL,
+  PRIMARY KEY (dni_preceptor, id_curso, codigo_materia, id_ciclo_lectivo),
+  FOREIGN KEY (id_curso, codigo_materia, id_ciclo_lectivo)
+    REFERENCES curso_materia(id_curso, codigo_materia, id_ciclo_lectivo)
+);
+
+CREATE INDEX idx_preceptor_asignacion_ciclo
+  ON preceptor_curso_materia(dni_preceptor, id_ciclo_lectivo, id_curso);
 
 CREATE TABLE profesor_rol (
   dni_profesor VARCHAR(20) REFERENCES profesor(dni) ON DELETE CASCADE,
@@ -223,10 +268,8 @@ CREATE TABLE profesor_curso_materia (
   codigo_materia VARCHAR(20) REFERENCES materia(codigo) ON DELETE CASCADE,
   id_ciclo_lectivo INTEGER NOT NULL REFERENCES ciclo_lectivo(id_ciclo_lectivo),
   PRIMARY KEY (dni_profesor, id_curso, codigo_materia, id_ciclo_lectivo),
-  FOREIGN KEY (id_curso, id_ciclo_lectivo)
-    REFERENCES curso(id_curso, id_ciclo_lectivo) ON DELETE CASCADE,
   FOREIGN KEY (id_curso, codigo_materia, id_ciclo_lectivo)
-    REFERENCES curso_materia(id_curso, codigo_materia, id_ciclo_lectivo) ON DELETE CASCADE
+    REFERENCES curso_materia(id_curso, codigo_materia, id_ciclo_lectivo)
 );
 
 CREATE TABLE nota (
@@ -242,7 +285,9 @@ CREATE TABLE nota (
   dni_profesor VARCHAR(20) REFERENCES profesor(dni),
   FOREIGN KEY (dni_alumno, id_curso, id_ciclo_lectivo)
     REFERENCES alumno_curso(dni_alumno, id_curso, id_ciclo_lectivo) ON UPDATE CASCADE,
-  UNIQUE (dni_alumno, codigo_materia, tipo_evaluacion, id_ciclo_lectivo)
+  FOREIGN KEY (id_curso, codigo_materia, id_ciclo_lectivo)
+    REFERENCES curso_materia(id_curso, codigo_materia, id_ciclo_lectivo),
+  UNIQUE (dni_alumno, id_curso, codigo_materia, tipo_evaluacion, id_ciclo_lectivo)
 );
 
 CREATE INDEX idx_nota_alumno
@@ -271,6 +316,8 @@ CREATE TABLE nota_individual (
   dni_profesor VARCHAR(20) REFERENCES profesor(dni),
   FOREIGN KEY (dni_alumno, id_curso, id_ciclo_lectivo)
     REFERENCES alumno_curso(dni_alumno, id_curso, id_ciclo_lectivo) ON UPDATE CASCADE ON DELETE CASCADE,
+  FOREIGN KEY (id_curso, codigo_materia, id_ciclo_lectivo)
+    REFERENCES curso_materia(id_curso, codigo_materia, id_ciclo_lectivo),
   CHECK (estado <> 'No realizó' OR calificacion = 1)
 );
 
@@ -295,11 +342,15 @@ SELECT cl.id_ciclo_lectivo, m.codigo
 FROM ciclo_lectivo cl CROSS JOIN materia m
 WHERE cl.anio = 2026;
 
-INSERT INTO curso (anio, division, id_ciclo_lectivo, id_especialidad)
-SELECT years.anio, '1', cl.id_ciclo_lectivo, e.id_especialidad
+-- Cargar la grilla oficial de cada plan desde la administración.
+
+INSERT INTO curso (anio, division, id_ciclo_lectivo, id_especialidad, id_plan_estudio)
+SELECT years.anio, '1', cl.id_ciclo_lectivo, e.id_especialidad, p.id_plan_estudio
 FROM generate_series(1, 6) AS years(anio)
 CROSS JOIN ciclo_lectivo cl
 LEFT JOIN especialidad e ON years.anio >= 3
+JOIN plan_estudio p ON (years.anio IN (1,2) AND p.ciclo='Básico')
+  OR (years.anio >= 3 AND p.id_especialidad=e.id_especialidad)
 WHERE cl.anio = 2026;
 
 INSERT INTO administrador (dni, nombre, apellido, email, cargo)

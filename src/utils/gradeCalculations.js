@@ -1,4 +1,4 @@
-const closurePeriods = ["FEBRERO", "DICIEMBRE", "FINAL"];
+const closurePeriods = ["DEFINITIVA", "FEBRERO", "DICIEMBRE", "FINAL"];
 
 export function formatGrade(value) {
   return value == null || value === "" ? "" : String(Number(value));
