@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import escudo from "./assets/escudo.png";
 import {
   apiFetch,
@@ -56,6 +56,30 @@ const planYears = (plan) => {
 function courseLabel(course) {
   const specialty = course.especialidad ? ` · ${course.especialidad}` : "";
   return `${course.anio}.º ${course.division}${specialty}`;
+}
+
+function useSavedViewMode(listKey) {
+  const storageKey = `la35Notas:view:${listKey}`;
+  const [viewMode, setViewMode] = useState(() => {
+    try {
+      return localStorage.getItem(storageKey) === "register"
+        ? "register"
+        : "blocks";
+    } catch {
+      return "blocks";
+    }
+  });
+
+  function selectViewMode(nextMode) {
+    setViewMode(nextMode);
+    try {
+      localStorage.setItem(storageKey, nextMode);
+    } catch {
+      // La preferencia visual sigue funcionando durante esta sesión.
+    }
+  }
+
+  return [viewMode, selectViewMode];
 }
 
 function App() {
@@ -3288,6 +3312,31 @@ function PaginationControls({
   );
 }
 
+function ViewModeToggle({ value, onChange, label = "Formato de vista" }) {
+  return (
+    <div className="view-mode-toggle" role="group" aria-label={label}>
+      <button
+        type="button"
+        className={`view-mode-button ${value === "blocks" ? "active" : ""}`}
+        aria-pressed={value === "blocks"}
+        onClick={() => onChange("blocks")}
+      >
+        <span className="view-mode-icon view-mode-icon-blocks" aria-hidden="true" />
+        Bloques
+      </button>
+      <button
+        type="button"
+        className={`view-mode-button ${value === "register" ? "active" : ""}`}
+        aria-pressed={value === "register"}
+        onClick={() => onChange("register")}
+      >
+        <span className="view-mode-icon view-mode-icon-register" aria-hidden="true" />
+        Registro
+      </button>
+    </div>
+  );
+}
+
 function MateriasPage({
   materias,
   catalogoMaterias,
@@ -3295,6 +3344,7 @@ function MateriasPage({
   openEditMateria,
   onAssignMateria,
 }) {
+  const [viewMode, setViewMode] = useSavedViewMode("materias");
   const [selectedSubjectCode, setSelectedSubjectCode] = useState(null);
   const [codigoParaAsignar, setCodigoParaAsignar] = useState("");
   const selectedSubject = materias.find(
@@ -3314,9 +3364,16 @@ function MateriasPage({
     <>
       <div className="section-header">
         <div className="section-title">Materias</div>
-        <button className="btn btn-blue" onClick={openNewMateria}>
-          + Nueva materia
-        </button>
+        <div className="section-actions">
+          <ViewModeToggle
+            value={viewMode}
+            onChange={setViewMode}
+            label="Vista de materias"
+          />
+          <button className="btn btn-blue" onClick={openNewMateria}>
+            + Nueva materia
+          </button>
+        </div>
       </div>
       <p className="muted-text">
         Cada materia tiene un código de catálogo y puede integrar varios planes y años.
@@ -3358,53 +3415,125 @@ function MateriasPage({
           </button>
         </div>
       </div>
-      <div className="my-notas-grid">
-        {materias.map((materia) => (
-          <article
-            key={materia.codigo}
-            className={`materia-card course-card subject-card ${selectedSubjectCode === materia.codigo ? "selected" : ""}`}
-          >
-            <div className="materia-header">
-              <div>
-                <div className="materia-name">{materia.nombre}</div>
-                <div className="materia-prof">Código: {materia.codigo}</div>
-                <div className="materia-prof">
-                  {materia.descripcion || "Sin descripción"}
+      {viewMode === "blocks" ? (
+        <div className="my-notas-grid">
+          {materias.map((materia) => (
+            <article
+              key={materia.codigo}
+              className={`materia-card course-card subject-card ${selectedSubjectCode === materia.codigo ? "selected" : ""}`}
+            >
+              <div className="materia-header">
+                <div>
+                  <div className="materia-name">{materia.nombre}</div>
+                  <div className="materia-prof">Código: {materia.codigo}</div>
+                  <div className="materia-prof">
+                    {materia.descripcion || "Sin descripción"}
+                  </div>
+                  {materia.planes?.map(({ id_plan_estudio, plan, anio }) => (
+                    <div className="materia-prof" key={`${id_plan_estudio}/${anio}`}>
+                      {plan} · {anio}.º
+                    </div>
+                  ))}
                 </div>
-                {materia.planes?.map(({ id_plan_estudio, plan, anio }) => (
-                  <div className="materia-prof" key={`${id_plan_estudio}/${anio}`}>{plan} · {anio}.º</div>
-                ))}
+                <span className="badge badge-blue">
+                  {materia.profesores.length}{" "}
+                  {materia.profesores.length === 1 ? "profesor" : "profesores"}
+                </span>
               </div>
-              <span className="badge badge-blue">
-                {materia.profesores.length}{" "}
-                {materia.profesores.length === 1 ? "profesor" : "profesores"}
-              </span>
-            </div>
-            <div className="course-actions">
-              <button
-                type="button"
-                className="btn btn-ghost btn-sm"
-                aria-expanded={selectedSubjectCode === materia.codigo}
-                onClick={() => toggleSubject(materia.codigo)}
-              >
-                {selectedSubjectCode === materia.codigo
-                  ? "Ocultar profesores"
-                  : "Ver profesores"}
-              </button>
-              <button
-                type="button"
-                className="btn btn-ghost btn-sm"
-                onClick={() => openEditMateria(materia)}
-              >
-                Editar
-              </button>
-            </div>
-          </article>
-        ))}
-        {!materias.length && (
-          <div className="empty-state">No hay materias para mostrar.</div>
-        )}
-      </div>
+              <div className="course-actions">
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm"
+                  aria-expanded={selectedSubjectCode === materia.codigo}
+                  onClick={() => toggleSubject(materia.codigo)}
+                >
+                  {selectedSubjectCode === materia.codigo
+                    ? "Ocultar profesores"
+                    : "Ver profesores"}
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm"
+                  onClick={() => openEditMateria(materia)}
+                >
+                  Editar
+                </button>
+              </div>
+            </article>
+          ))}
+          {!materias.length && (
+            <div className="empty-state">No hay materias para mostrar.</div>
+          )}
+        </div>
+      ) : (
+        <div className="card register-card">
+          <div className="table-wrap">
+            <table className="register-table subject-register-table">
+              <thead>
+                <tr>
+                  <th>Materia</th>
+                  <th>Código</th>
+                  <th>Descripción</th>
+                  <th>Plan y año</th>
+                  <th>Profesores</th>
+                  <th>Acciones</th>
+                </tr>
+              </thead>
+              <tbody>
+                {materias.map((materia) => (
+                  <tr
+                    key={materia.codigo}
+                    className={selectedSubjectCode === materia.codigo ? "selected" : ""}
+                  >
+                    <td><strong>{materia.nombre}</strong></td>
+                    <td><span className="register-code">{materia.codigo}</span></td>
+                    <td className="register-wrap-text">
+                      {materia.descripcion || "Sin descripción"}
+                    </td>
+                    <td>
+                      {materia.planes?.length ? (
+                        materia.planes.map(({ id_plan_estudio, plan, anio }) => (
+                          <span className="register-detail-line" key={`${id_plan_estudio}/${anio}`}>
+                            {plan} · {anio}.º
+                          </span>
+                        ))
+                      ) : "—"}
+                    </td>
+                    <td>
+                      <span className="badge badge-blue">
+                        {materia.profesores.length}{" "}
+                        {materia.profesores.length === 1 ? "profesor" : "profesores"}
+                      </span>
+                    </td>
+                    <td>
+                      <div className="action-row register-actions">
+                        <button
+                          type="button"
+                          className="btn btn-ghost btn-sm"
+                          aria-expanded={selectedSubjectCode === materia.codigo}
+                          onClick={() => toggleSubject(materia.codigo)}
+                        >
+                          {selectedSubjectCode === materia.codigo ? "Ocultar docentes" : "Ver docentes"}
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn-ghost btn-sm"
+                          onClick={() => openEditMateria(materia)}
+                        >
+                          Editar
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+                {!materias.length && (
+                  <tr><td colSpan="6"><div className="empty-state">No hay materias para mostrar.</div></td></tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
       {selectedSubject && (
         <div className="course-students">
           <div className="section-header">
@@ -3466,6 +3595,7 @@ function CursosPage({
   openNewCurso,
   openEditCurso,
 }) {
+  const [viewMode, setViewMode] = useSavedViewMode("cursos");
   const [selectedCourseId, setSelectedCourseId] = useState(null);
   const [expandedSubjects, setExpandedSubjects] = useState({});
   const selectedCourse = cursos.find(
@@ -3473,6 +3603,15 @@ function CursosPage({
   );
   const courseAlumnos = alumnos.filter(
     (alumno) => String(alumno.id_curso) === String(selectedCourseId),
+  );
+  const alumnosPorCurso = useMemo(
+    () =>
+      alumnos.reduce((counts, alumno) => {
+        const courseId = String(alumno.id_curso);
+        counts[courseId] = (counts[courseId] || 0) + 1;
+        return counts;
+      }, {}),
+    [alumnos],
   );
 
   function toggleCourse(courseId) {
@@ -3492,16 +3631,26 @@ function CursosPage({
     <>
       <div className="section-header">
         <div className="section-title">Cursos y Divisiones</div>
-        {canManageCourses && (
-          <button className="btn btn-blue" onClick={openNewCurso}>
-            + Nuevo curso
-          </button>
-        )}
+        <div className="section-actions">
+          <ViewModeToggle
+            value={viewMode}
+            onChange={setViewMode}
+            label="Vista de cursos"
+          />
+          {canManageCourses && (
+            <button className="btn btn-blue" onClick={openNewCurso}>
+              + Nuevo curso
+            </button>
+          )}
+        </div>
       </div>
+      {viewMode === "blocks" ? (
       <div className="my-notas-grid">
         {cursos.map((curso) => {
           const isSelected = selectedCourseId === curso.id_curso;
           const label = courseLabel(curso);
+          const studentCount =
+            curso.cantidad_alumnos ?? alumnosPorCurso[String(curso.id_curso)] ?? 0;
           return (
             <article
               key={curso.id_curso}
@@ -3510,7 +3659,7 @@ function CursosPage({
               <div className="materia-header">
                 <div className="materia-name">{label}</div>
                 <span className="badge badge-blue">
-                  {curso.cantidad_alumnos ?? courseAlumnos.length} alumnos
+                  {studentCount} alumnos
                 </span>
               </div>
               <div className="materia-body">
@@ -3576,6 +3725,75 @@ function CursosPage({
           <div className="empty-state">No hay cursos para mostrar.</div>
         )}
       </div>
+      ) : (
+        <div className="card register-card">
+          <div className="table-wrap">
+            <table className="register-table course-register-table">
+              <thead>
+                <tr>
+                  <th>Curso</th>
+                  <th>Alumnos</th>
+                  <th>Plan de estudio</th>
+                  <th>Turno</th>
+                  <th>Materias</th>
+                  <th>Acciones</th>
+                </tr>
+              </thead>
+              <tbody>
+                {cursos.map((curso) => {
+                  const studentCount =
+                    curso.cantidad_alumnos ?? alumnosPorCurso[String(curso.id_curso)] ?? 0;
+                  const subjectNames = curso.materias?.length
+                    ? curso.materias.map((materia) =>
+                        typeof materia === "string"
+                          ? materias.find((item) => item.codigo === materia)?.nombre || materia
+                          : materia.nombre,
+                      )
+                    : [];
+                  const isSelected = selectedCourseId === curso.id_curso;
+                  return (
+                    <Fragment key={curso.id_curso}>
+                      <tr className={isSelected ? "selected" : ""}>
+                        <td><strong>{courseLabel(curso)}</strong></td>
+                        <td><span className="register-count">{studentCount}</span></td>
+                        <td className="register-wrap-text">{curso.plan_estudio || "—"}</td>
+                        <td>{curso.turno || "Sin turno asignado"}</td>
+                        <td className="register-wrap-text">
+                          {subjectNames.length ? subjectNames.join(", ") : "Sin materias asignadas"}
+                        </td>
+                        <td>
+                          <div className="action-row register-actions">
+                            <button
+                              type="button"
+                              className="btn btn-ghost btn-sm"
+                              aria-expanded={isSelected}
+                              onClick={() => toggleCourse(curso.id_curso)}
+                            >
+                              {isSelected ? "Ocultar alumnos" : "Ver alumnos"}
+                            </button>
+                            {canManageCourses && (
+                              <button
+                                type="button"
+                                className="btn btn-ghost btn-sm"
+                                onClick={() => openEditCurso(curso)}
+                              >
+                                Editar
+                              </button>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    </Fragment>
+                  );
+                })}
+                {!cursos.length && (
+                  <tr><td colSpan="6"><div className="empty-state">No hay cursos para mostrar.</div></td></tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
       {selectedCourse && (
         <div className="course-students">
           <div className="section-header">
@@ -3631,6 +3849,7 @@ function CursosPage({
 }
 
 function StudyPlansPage({ planes, especialidades, catalogo, onChange, pushToast }) {
+  const [viewMode, setViewMode] = useSavedViewMode("planes");
   const [form, setForm] = useState(null);
   const [year, setYear] = useState("");
   const [code, setCode] = useState("");
@@ -3689,8 +3908,18 @@ function StudyPlansPage({ planes, especialidades, catalogo, onChange, pushToast 
     <>
       <div className="section-header">
         <div className="section-title">Planes de estudio</div>
-        <button type="button" className="btn btn-blue" onClick={() => open()}>+ Nuevo plan</button>
+        <div className="section-actions">
+          <ViewModeToggle
+            value={viewMode}
+            onChange={setViewMode}
+            label="Vista de planes de estudio"
+          />
+          <button type="button" className="btn btn-blue" onClick={() => open()}>
+            + Nuevo plan
+          </button>
+        </div>
       </div>
+      {viewMode === "blocks" ? (
       <div className="my-notas-grid">
         {planes.map((plan) => (
           <article className="materia-card course-card" key={plan.id_plan_estudio}>
@@ -3717,7 +3946,62 @@ function StudyPlansPage({ planes, especialidades, catalogo, onChange, pushToast 
             </div>
           </article>
         ))}
+        {!planes.length && (
+          <div className="empty-state">No hay planes para mostrar.</div>
+        )}
       </div>
+      ) : (
+        <div className="card register-card">
+          <div className="table-wrap">
+            <table className="register-table plan-register-table">
+              <thead>
+                <tr>
+                  <th>Plan de estudio</th>
+                  <th>Ciclo</th>
+                  <th>Especialidad</th>
+                  <th>Materias por año</th>
+                  <th>Acciones</th>
+                </tr>
+              </thead>
+              <tbody>
+                {planes.map((plan) => (
+                  <tr key={plan.id_plan_estudio}>
+                    <td><strong>{plan.nombre}</strong></td>
+                    <td><span className="badge badge-grey">{plan.ciclo}</span></td>
+                    <td className="register-wrap-text">{plan.especialidad || "—"}</td>
+                    <td>
+                      {planYears(plan).map((anio) => {
+                        const subjects = plan.materias
+                          .filter((item) => item.anio === anio)
+                          .map((item) => item.nombre);
+                        return (
+                          <span className="register-detail-line" key={anio}>
+                            <strong>{anio}.º año:</strong>{" "}
+                            {subjects.length ? subjects.join(", ") : "Sin materias"}
+                          </span>
+                        );
+                      })}
+                    </td>
+                    <td>
+                      <div className="action-row register-actions">
+                        <button type="button" className="btn btn-ghost btn-sm" onClick={() => open(plan)}>
+                          Editar
+                        </button>
+                        <button type="button" className="btn btn-ghost btn-sm" onClick={() => open(plan, true)}>
+                          Duplicar
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+                {!planes.length && (
+                  <tr><td colSpan="5"><div className="empty-state">No hay planes para mostrar.</div></td></tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
       {form && (
         <div className="modal-overlay open">
           <form className="modal" onSubmit={save}>
@@ -4741,7 +5025,14 @@ function formatAverage(value) {
 }
 
 function BulletinHistory({ bulletin, showStudentName = true, onPdfError }) {
+  const [viewMode, setViewMode] = useSavedViewMode("boletines");
+  const [expandedCycles, setExpandedCycles] = useState({});
   const cycles = bulletin?.ciclos || [];
+
+  useEffect(() => {
+    setExpandedCycles({});
+  }, [bulletin]);
+
   if (!cycles.length)
     return (
       <div className="card empty-state">No hay boletines para mostrar.</div>
@@ -4749,14 +5040,21 @@ function BulletinHistory({ bulletin, showStudentName = true, onPdfError }) {
 
   return (
     <div className="bulletin-history">
-      {showStudentName && bulletin.nombre && (
-        <div className="section-header">
+      <div className="section-header bulletin-history-header">
+        {showStudentName && bulletin.nombre ? (
           <div className="section-title">
             Boletines de {bulletin.apellido?.toLocaleUpperCase("es-AR")},{" "}
             {bulletin.nombre}
           </div>
-        </div>
-      )}
+        ) : (
+          <div className="section-title">Ciclos lectivos</div>
+        )}
+        <ViewModeToggle
+          value={viewMode}
+          onChange={setViewMode}
+          label="Vista del historial de boletines"
+        />
+      </div>
       {bulletin.promedio_general != null && (
         <div className="card bulletin-general-average">
           <strong>Promedio general</strong>
@@ -4765,113 +5063,208 @@ function BulletinHistory({ bulletin, showStudentName = true, onPdfError }) {
           </span>
         </div>
       )}
-      {cycles.map((cycle) => (
-        <section
-          className="card bulletin-cycle"
-          key={`${cycle.anio}-${cycle.cursos?.[0]?.id_curso || "sin-curso"}`}
-        >
-          <div className="bulletin-cycle-heading">
-            <h3>Ciclo lectivo {cycle.anio}</h3>
-            <button
-              type="button"
-              className="btn btn-ghost btn-sm bulletin-pdf-button"
-              onClick={() => {
-                const pdfWindow = window.open("about:blank", "_blank");
-                import("./utils/bulletinPdf")
-                  .then(({ openBulletinPdf }) =>
-                    openBulletinPdf(bulletin, cycle, pdfWindow),
-                  )
-                  .catch((error) => {
-                    pdfWindow?.close();
-                    onPdfError?.(error);
-                  });
-              }}
-            >
-              Ver en PDF
-            </button>
-            <span className="badge badge-blue">
-              Promedio del año: {formatAverage(cycle.promedio)}
-            </span>
-          </div>
-          {cycle.cursos?.map((curso) => (
-            <div className="bulletin-course" key={curso.id_curso}>
-              <h4>
-                {courseLabel(curso)}
-                {curso.fecha_baja && " · Inscripción cerrada"}
-              </h4>
-              <div className="table-wrap">
-                <table className="bulletin-table">
-                  <thead>
-                    <tr>
-                      <th>Materia</th>
-                      {BULLETIN_PERIODS.map(([, label]) => (
-                        <th key={label}>{label}</th>
-                      ))}
-                      <th>Calificación definitiva</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {curso.materias?.map((materia) => (
-                      <tr key={materia.codigo}>
-                        <th scope="row">
-                          {materia.nombre}
-                          {materia.evaluaciones?.length > 0 && (
-                            <details className="bulletin-evaluations">
-                              <summary>Evaluaciones individuales</summary>
-                              <ul>
-                                {materia.evaluaciones.map((item) => (
-                                  <li key={item.id}>{item.tema} · {item.calificacion}
-                                    {item.adeuda === true && " · Adeuda"}
-                                  </li>
-                                ))}
-                              </ul>
-                            </details>
-                          )}
-                        </th>
-                        {BULLETIN_PERIODS.map(([period]) => {
-                          const grades =
-                            materia.notas?.filter(
-                              (nota) => nota.tipo_evaluacion === period,
-                            ) || [];
-                          return (
-                            <td key={period}>
-                              {grades.length ? (
-                                <div className="bulletin-cell-grades">
-                                  {grades.map((nota, index) => (
-                                    <span
-                                      key={nota.id || `${period}-${index}`}
-                                      className={`nota-row-val ${Number(nota.calificacion) >= 6 ? "ok" : "warn"}`}
-                                      title={nota.tema || undefined}
-                                    >
-                                      {nota.calificacion}
-                                    </span>
-                                  ))}
-                                </div>
-                              ) : (
-                                "—"
-                              )}
-                            </td>
-                          );
-                        })}
-                        <td>{getDefinitiveGrade(materia) || "—"}</td>
-                      </tr>
-                    ))}
-                    {!curso.materias?.length && (
+      {viewMode === "blocks" ? (
+        cycles.map((cycle) => (
+          <section
+            className="card bulletin-cycle"
+            key={`${cycle.anio}-${cycle.cursos?.[0]?.id_curso || "sin-curso"}`}
+          >
+            <div className="bulletin-cycle-heading">
+              <h3>Ciclo lectivo {cycle.anio}</h3>
+              <BulletinPdfButton
+                bulletin={bulletin}
+                cycle={cycle}
+                onPdfError={onPdfError}
+              />
+              <span className="badge badge-blue">
+                Promedio del año: {formatAverage(cycle.promedio)}
+              </span>
+            </div>
+            <BulletinCourses cycle={cycle} />
+          </section>
+        ))
+      ) : (
+        <div className="card register-card bulletin-register-card">
+          <div className="table-wrap">
+            <table className="register-table bulletin-register-table">
+              <thead>
+                <tr>
+                  <th>Ciclo lectivo</th>
+                  <th>Curso(s)</th>
+                  <th>Promedio del año</th>
+                  <th>Acciones</th>
+                </tr>
+              </thead>
+              <tbody>
+                {cycles.map((cycle) => {
+                  const cycleKey = `${cycle.anio}-${cycle.cursos?.[0]?.id_curso || "sin-curso"}`;
+                  const isExpanded = Boolean(expandedCycles[cycleKey]);
+                  return (
+                    <Fragment key={cycleKey}>
                       <tr>
-                        <td colSpan={BULLETIN_PERIODS.length + 2}>
-                          No hay materias asignadas a este curso.
+                        <td><strong>{cycle.anio}</strong></td>
+                        <td>
+                          {cycle.cursos?.length ? (
+                            cycle.cursos.map((curso) => (
+                              <span className="register-detail-line" key={curso.id_curso}>
+                                {courseLabel(curso)}
+                                {curso.fecha_baja && " · Inscripción cerrada"}
+                              </span>
+                            ))
+                          ) : "Sin curso asignado"}
+                        </td>
+                        <td>
+                          <span className="badge badge-blue">
+                            {formatAverage(cycle.promedio)}
+                          </span>
+                        </td>
+                        <td>
+                          <div className="action-row register-actions bulletin-register-actions">
+                            <BulletinPdfButton
+                              bulletin={bulletin}
+                              cycle={cycle}
+                              onPdfError={onPdfError}
+                            />
+                            <button
+                              type="button"
+                              className="btn btn-ghost btn-sm"
+                              aria-expanded={isExpanded}
+                              aria-controls={`bulletin-cycle-${cycleKey}`}
+                              onClick={() =>
+                                setExpandedCycles((current) => ({
+                                  ...current,
+                                  [cycleKey]: !current[cycleKey],
+                                }))
+                              }
+                            >
+                              {isExpanded ? "Ocultar notas" : "Ver calificaciones"}
+                            </button>
+                          </div>
                         </td>
                       </tr>
-                    )}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          ))}
-        </section>
-      ))}
+                      {isExpanded && (
+                        <tr className="bulletin-register-detail-row">
+                          <td colSpan="4">
+                            <div
+                              className="bulletin-register-expanded"
+                              id={`bulletin-cycle-${cycleKey}`}
+                            >
+                              <BulletinCourses cycle={cycle} />
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                    </Fragment>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
     </div>
   );
+}
+
+function BulletinPdfButton({ bulletin, cycle, onPdfError }) {
+  return (
+    <button
+      type="button"
+      className="btn btn-ghost btn-sm bulletin-pdf-button"
+      onClick={() => {
+        const pdfWindow = window.open("about:blank", "_blank");
+        import("./utils/bulletinPdf")
+          .then(({ openBulletinPdf }) =>
+            openBulletinPdf(bulletin, cycle, pdfWindow),
+          )
+          .catch((error) => {
+            pdfWindow?.close();
+            onPdfError?.(error);
+          });
+      }}
+    >
+      Ver en PDF
+    </button>
+  );
+}
+
+function BulletinCourses({ cycle }) {
+  return cycle.cursos?.map((curso) => (
+    <div className="bulletin-course" key={curso.id_curso}>
+      <h4>
+        {courseLabel(curso)}
+        {curso.fecha_baja && " · Inscripción cerrada"}
+      </h4>
+      <div className="table-wrap">
+        <table className="bulletin-table">
+          <thead>
+            <tr>
+              <th>Materia</th>
+              {BULLETIN_PERIODS.map(([, label]) => (
+                <th key={label}>{label}</th>
+              ))}
+              <th>Calificación definitiva</th>
+            </tr>
+          </thead>
+          <tbody>
+            {curso.materias?.map((materia) => (
+              <tr key={materia.codigo}>
+                <th scope="row">
+                  {materia.nombre}
+                  {materia.evaluaciones?.length > 0 && (
+                    <details className="bulletin-evaluations">
+                      <summary>Evaluaciones individuales</summary>
+                      <ul>
+                        {materia.evaluaciones.map((item) => (
+                          <li key={item.id}>
+                            {item.tema} · {item.calificacion}
+                            {item.adeuda === true && " · Adeuda"}
+                          </li>
+                        ))}
+                      </ul>
+                    </details>
+                  )}
+                </th>
+                {BULLETIN_PERIODS.map(([period]) => {
+                  const grades =
+                    materia.notas?.filter(
+                      (nota) => nota.tipo_evaluacion === period,
+                    ) || [];
+                  return (
+                    <td key={period}>
+                      {grades.length ? (
+                        <div className="bulletin-cell-grades">
+                          {grades.map((nota, index) => (
+                            <span
+                              key={nota.id || `${period}-${index}`}
+                              className={`nota-row-val ${Number(nota.calificacion) >= 6 ? "ok" : "warn"}`}
+                              title={nota.tema || undefined}
+                            >
+                              {nota.calificacion}
+                            </span>
+                          ))}
+                        </div>
+                      ) : (
+                        "—"
+                      )}
+                    </td>
+                  );
+                })}
+                <td>{getDefinitiveGrade(materia) || "—"}</td>
+              </tr>
+            ))}
+            {!curso.materias?.length && (
+              <tr>
+                <td colSpan={BULLETIN_PERIODS.length + 2}>
+                  No hay materias asignadas a este curso.
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  ));
 }
 
 function NotificacionesPage({ notificaciones, isAlumno }) {
