@@ -342,6 +342,7 @@ app.get("/api/alumnos", auth, async (req, res) => {
     const { rows } = await pool.query(
       `
       SELECT a.dni, a.nombre, a.apellido, a.email, a.estado,
+             d.calle, d.numero_calle, d.departamento, d.localidad,
              c.id_curso, c.anio, c.division, e.nombre AS especialidad, cl.anio AS ciclo_lectivo,
              COALESCE(ROUND(AVG(n.calificacion), 2), 0) AS promedio,
              ROUND(AVG(n.calificacion), 2) AS promedio_anio,
@@ -349,6 +350,7 @@ app.get("/api/alumnos", auth, async (req, res) => {
               FROM nota nota_general
               WHERE nota_general.dni_alumno=a.dni) AS promedio_general
       FROM alumno a
+      LEFT JOIN domicilio d ON d.id_domicilio=a.id_domicilio
       LEFT JOIN LATERAL (
         SELECT ac.*
         FROM alumno_curso ac
@@ -368,9 +370,9 @@ app.get("/api/alumnos", auth, async (req, res) => {
       LEFT JOIN nota n ON n.dni_alumno = a.dni
         AND n.id_ciclo_lectivo = ac.id_ciclo_lectivo
         AND n.id_curso = ac.id_curso
-      GROUP BY a.dni, c.id_curso, e.nombre, cl.anio
+      GROUP BY a.dni, d.id_domicilio, c.id_curso, e.nombre, cl.anio
       ORDER BY a.apellido, a.nombre
-    `,
+      `,
       [cicloLectivo],
     );
     res.json(rows);
@@ -571,6 +573,8 @@ app.post(
   auth,
   roles("admin", "preceptor"),
   async (req, res) => {
+  const body = req.body || {};
+
     const {
       dni,
       nombre,
@@ -578,41 +582,109 @@ app.post(
       email,
       estado = "Activo",
       id_curso,
-    } = req.body;
+    } = body;
+
+    const camposDomicilio = [
+      "calle",
+      "numero_calle",
+      "departamento",
+      "localidad",
+    ];
+
+    for (const campo of camposDomicilio) {
+      if (body[campo] != null && typeof body[campo] !== "string") {
+        return fail(res, 400, "Los datos del domicilio no son válidos");
+      }
+    }
+
+    const calle = (body.calle || "").trim();
+    const numeroCalle = (body.numero_calle || "").trim();
+    const departamento = (body.departamento || "").trim();
+    const localidad = (body.localidad || "").trim();
+
+    const tieneDomicilio = Boolean(
+      calle || numeroCalle || departamento || localidad,
+    );
+
     if (!dni || !nombre || !apellido) {
       return fail(res, 400, "DNI, nombre y apellido son obligatorios");
     }
 
+    if (
+      calle.length > 100 ||
+      numeroCalle.length > 10 ||
+      departamento.length > 50 ||
+      localidad.length > 80
+    ) {
+      return fail(res, 400, "Los datos del domicilio superan el límite permitido");
+    }
+
+    if (tieneDomicilio && (!calle || !localidad)) {
+      return fail(
+        res,
+        400,
+        "Para registrar un domicilio, la calle y la localidad son obligatorias",
+      );
+    }
+
     const client = await pool.connect();
+
     try {
       await client.query("BEGIN");
+
+      let idDomicilio = null;
+
+      if (tieneDomicilio) {
+        const { rows: domicilioRows } = await client.query(
+          `
+          INSERT INTO domicilio (calle, numero_calle, departamento, localidad)
+          VALUES ($1, $2, $3, $4)
+          RETURNING id_domicilio
+          `,
+          [
+            calle,
+            numeroCalle || null,
+            departamento || null,
+            localidad,
+          ],
+        );
+
+        idDomicilio = domicilioRows[0].id_domicilio;
+      }
+
       const { rows } = await client.query(
         `
-      INSERT INTO alumno (dni, nombre, apellido, email, estado)
-      VALUES ($1,$2,$3,$4,$5)
-      RETURNING *
-    `,
-        [dni, nombre, apellido, email || null, estado],
+        INSERT INTO alumno (dni, nombre, apellido, email, estado, id_domicilio)
+        VALUES ($1, $2, $3, $4, $5, $6)
+        RETURNING *
+        `,
+        [dni, nombre, apellido, email || null, estado, idDomicilio],
       );
+
       await ensurePersonAccount(client, dni, "alumno", "dni_alumno");
+
       if (id_curso && estado === "Activo") {
         await client.query(
           `
-        INSERT INTO alumno_curso (dni_alumno, id_curso, id_ciclo_lectivo)
-        SELECT $1, $2, id_ciclo_lectivo
-        FROM ciclo_lectivo
-        WHERE id_ciclo_lectivo=$3
-      `,
+          INSERT INTO alumno_curso (dni_alumno, id_curso, id_ciclo_lectivo)
+          SELECT $1, $2, id_ciclo_lectivo
+          FROM ciclo_lectivo
+          WHERE id_ciclo_lectivo=$3
+          `,
           [dni, id_curso, await getCycleId(client, requestedCycleYear(req))],
         );
       }
+
       await client.query("COMMIT");
       res.status(201).json(rows[0]);
     } catch (error) {
       await client.query("ROLLBACK");
       console.error(error);
-      if (error.code === "23505")
+
+      if (error.code === "23505") {
         return fail(res, 409, "Ya existe un alumno con ese DNI");
+      }
+
       fail(res, 400, "No se pudo crear el alumno");
     } finally {
       client.release();
@@ -620,19 +692,70 @@ app.post(
   },
 );
 
+
 app.put(
   "/api/alumnos/:dni",
   auth,
   roles("admin", "preceptor"),
   async (req, res) => {
-    const { dni } = req.params;
-    const { nombre, apellido, email, estado, id_curso } = req.body;
+   const { dni } = req.params;
+const body = req.body || {};
 
-    const client = await pool.connect();
+const { nombre, apellido, email, estado, id_curso } = body;
+
+const camposDomicilio = [
+  "calle",
+  "numero_calle",
+  "departamento",
+  "localidad",
+];
+
+const domicilioEnviado = camposDomicilio.some((campo) =>
+  Object.prototype.hasOwnProperty.call(body, campo),
+);
+
+for (const campo of camposDomicilio) {
+  if (body[campo] != null && typeof body[campo] !== "string") {
+    return fail(res, 400, "Los datos del domicilio no son válidos");
+  }
+}
+
+const calle = (body.calle || "").trim();
+const numeroCalle = (body.numero_calle || "").trim();
+const departamento = (body.departamento || "").trim();
+const localidad = (body.localidad || "").trim();
+
+const tieneDomicilio = Boolean(
+  calle || numeroCalle || departamento || localidad,
+);
+
+if (
+  calle.length > 100 ||
+  numeroCalle.length > 10 ||
+  departamento.length > 50 ||
+  localidad.length > 80
+) {
+  return fail(
+    res,
+    400,
+    "Los datos del domicilio superan el límite permitido",
+  );
+}
+
+if (domicilioEnviado && tieneDomicilio && (!calle || !localidad)) {
+  return fail(
+    res,
+    400,
+    "Para registrar un domicilio, la calle y la localidad son obligatorias",
+  );
+}
+
+const client = await pool.connect();
+
     try {
       await client.query("BEGIN");
       const { rows: alumnoActual } = await client.query(
-        "SELECT estado FROM alumno WHERE dni=$1 FOR UPDATE",
+        "SELECT estado, id_domicilio FROM alumno WHERE dni=$1 FOR UPDATE",
         [dni],
       );
       if (!alumnoActual[0]) {
@@ -661,6 +784,116 @@ app.put(
         await client.query("ROLLBACK");
         return fail(res, 404, "Alumno no encontrado");
       }
+
+      if (domicilioEnviado) {
+  const domicilioAnteriorId = alumnoActual[0].id_domicilio;
+  let nuevoDomicilioId = domicilioAnteriorId;
+
+  if (tieneDomicilio) {
+    if (domicilioAnteriorId) {
+      const { rows: referencias } = await client.query(
+        `
+        SELECT EXISTS(
+          SELECT 1
+          FROM alumno
+          WHERE id_domicilio=$1
+            AND dni<>$2
+        ) AS compartido
+        `,
+        [domicilioAnteriorId, dni],
+      );
+
+      if (referencias[0].compartido) {
+        const { rows: domicilioRows } = await client.query(
+          `
+          INSERT INTO domicilio (
+            calle,
+            numero_calle,
+            departamento,
+            localidad
+          )
+          VALUES ($1, $2, $3, $4)
+          RETURNING id_domicilio
+          `,
+          [
+            calle,
+            numeroCalle || null,
+            departamento || null,
+            localidad,
+          ],
+        );
+
+        nuevoDomicilioId = domicilioRows[0].id_domicilio;
+      } else {
+        await client.query(
+          `
+          UPDATE domicilio
+          SET calle=$2,
+              numero_calle=$3,
+              departamento=$4,
+              localidad=$5
+          WHERE id_domicilio=$1
+          `,
+          [
+            domicilioAnteriorId,
+            calle,
+            numeroCalle || null,
+            departamento || null,
+            localidad,
+          ],
+        );
+      }
+    } else {
+      const { rows: domicilioRows } = await client.query(
+        `
+        INSERT INTO domicilio (
+          calle,
+          numero_calle,
+          departamento,
+          localidad
+        )
+        VALUES ($1, $2, $3, $4)
+        RETURNING id_domicilio
+        `,
+        [
+          calle,
+          numeroCalle || null,
+          departamento || null,
+          localidad,
+        ],
+      );
+
+      nuevoDomicilioId = domicilioRows[0].id_domicilio;
+    }
+  } else {
+    nuevoDomicilioId = null;
+  }
+
+  if (nuevoDomicilioId !== domicilioAnteriorId) {
+    await client.query(
+      "UPDATE alumno SET id_domicilio=$2 WHERE dni=$1",
+      [dni, nuevoDomicilioId],
+    );
+
+    if (domicilioAnteriorId) {
+      await client.query(
+        `
+        DELETE FROM domicilio
+        WHERE id_domicilio=$1
+          AND NOT EXISTS (
+            SELECT 1
+            FROM alumno
+            WHERE id_domicilio=$1
+          )
+        `,
+        [domicilioAnteriorId],
+      );
+    }
+  }
+
+  rows[0].id_domicilio = nuevoDomicilioId;
+}
+
       const debeActualizarCurso =
         debeDesasignarCurso ||
         (id_curso !== undefined &&

@@ -130,13 +130,17 @@ function App() {
   });
   const [materiaForm, setMateriaForm] = useState({ codigo: "", nombre: "" });
   const [newAlumno, setNewAlumno] = useState({
-    dni: "",
-    nombre: "",
-    apellido: "",
-    email: "",
-    id_curso: "",
-    estado: "Activo",
-  });
+  dni: "",
+  nombre: "",
+  apellido: "",
+  email: "",
+  calle: "",
+  numero_calle: "",
+  departamento: "",
+  localidad: "",
+  id_curso: "",
+  estado: "Activo",
+});
 
   const [notaForm, setNotaForm] = useState({
     BIMESTRE_1: "",
@@ -426,15 +430,19 @@ function App() {
   }
 
   function resetNewAlumno() {
-    setNewAlumno({
-      dni: "",
-      nombre: "",
-      apellido: "",
-      email: "",
-      id_curso: cursos[0]?.id_curso || "",
-      estado: "Activo",
-    });
-  }
+  setNewAlumno({
+    dni: "",
+    nombre: "",
+    apellido: "",
+    email: "",
+    calle: "",
+    numero_calle: "",
+    departamento: "",
+    localidad: "",
+    id_curso: cursos[0]?.id_curso || "",
+    estado: "Activo",
+  });
+}
 
   function openNewAlumno() {
     resetNewAlumno();
@@ -442,28 +450,36 @@ function App() {
   }
 
   function openEditAlumno(alumno) {
-    setNewAlumno({
-      dni: alumno.dni,
-      nombre: alumno.nombre || "",
-      apellido: alumno.apellido || "",
-      email: alumno.email || "",
-      id_curso: alumno.estado === "Activo" ? alumno.id_curso || "" : "",
-      estado: alumno.estado || "Activo",
-    });
-    setModalAlumno({ mode: "edit", alumno });
-  }
+  setNewAlumno({
+    dni: alumno.dni,
+    nombre: alumno.nombre || "",
+    apellido: alumno.apellido || "",
+    email: alumno.email || "",
+    calle: alumno.calle || "",
+    numero_calle: alumno.numero_calle || "",
+    departamento: alumno.departamento || "",
+    localidad: alumno.localidad || "",
+    id_curso: alumno.estado === "Activo" ? alumno.id_curso || "" : "",
+    estado: alumno.estado || "Activo",
+  });
+  setModalAlumno({ mode: "edit", alumno });
+}
 
   async function saveAlumno(event) {
     event.preventDefault();
     try {
       const body = {
-        dni: newAlumno.dni.trim(),
-        nombre: newAlumno.nombre.trim(),
-        apellido: newAlumno.apellido.trim(),
-        email: newAlumno.email.trim() || null,
-        id_curso:
-          newAlumno.estado === "Activo" ? newAlumno.id_curso || null : null,
-        estado: newAlumno.estado,
+          dni: newAlumno.dni.trim(),
+          nombre: newAlumno.nombre.trim(),
+          apellido: newAlumno.apellido.trim(),
+          email: newAlumno.email.trim() || null,
+          calle: newAlumno.calle.trim(),
+          numero_calle: newAlumno.numero_calle.trim(),
+          departamento: newAlumno.departamento.trim(),
+          localidad: newAlumno.localidad.trim(),
+          id_curso:
+            newAlumno.estado === "Activo" ? newAlumno.id_curso || null : null,
+          estado: newAlumno.estado,
       };
       if (modalAlumno.mode === "new") {
         await apiFetch("/alumnos", {
@@ -1484,6 +1500,72 @@ function App() {
                 }
               />
             </div>
+             <div className="modal-sub">Domicilio</div>
+
+            <div className="field">
+              <label htmlFor="alumno-calle">Calle</label>
+              <input
+                id="alumno-calle"
+                type="text"
+                value={newAlumno.calle}
+                onChange={(e) =>
+                  setNewAlumno({ ...newAlumno, calle: e.target.value })
+                }
+                maxLength={100}
+                required={Boolean(
+                  newAlumno.calle.trim() ||
+                  newAlumno.numero_calle.trim() ||
+                  newAlumno.departamento.trim() ||
+                  newAlumno.localidad.trim()
+                )}
+              />
+            </div>
+
+            <div className="field">
+              <label htmlFor="alumno-numero-calle">Número</label>
+              <input
+                id="alumno-numero-calle"
+                type="text"
+                value={newAlumno.numero_calle}
+                onChange={(e) =>
+                  setNewAlumno({ ...newAlumno, numero_calle: e.target.value })
+                }
+                maxLength={10}
+              />
+            </div>
+
+      <div className="field">
+        <label htmlFor="alumno-departamento">Departamento</label>
+        <input
+          id="alumno-departamento"
+          type="text"
+          value={newAlumno.departamento}
+          onChange={(e) =>
+            setNewAlumno({ ...newAlumno, departamento: e.target.value })
+          }
+          maxLength={50}
+        />
+      </div>
+
+      <div className="field">
+        <label htmlFor="alumno-localidad">Localidad</label>
+        <input
+          id="alumno-localidad"
+          type="text"
+          value={newAlumno.localidad}
+          onChange={(e) =>
+            setNewAlumno({ ...newAlumno, localidad: e.target.value })
+          }
+          maxLength={80}
+          required={Boolean(
+            newAlumno.calle.trim() ||
+            newAlumno.numero_calle.trim() ||
+            newAlumno.departamento.trim() ||
+            newAlumno.localidad.trim()
+          )}
+        />
+      </div>
+            
             <div className="field">
               <label>Curso</label>
               <select

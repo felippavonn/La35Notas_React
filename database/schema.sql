@@ -112,7 +112,7 @@ CREATE TABLE alumno (
 );
 
 CREATE TABLE alumno_curso (
-  dni_alumno VARCHAR(20) NOT NULL REFERENCES alumno(dni) ON DELETE CASCADE,
+  dni_alumno VARCHAR(20) NOT NULL REFERENCES alumno(dni) ON UPDATE CASCADE ON DELETE CASCADE,
   id_curso INTEGER NOT NULL,
   id_ciclo_lectivo INTEGER NOT NULL REFERENCES ciclo_lectivo(id_ciclo_lectivo),
   fecha_inscripcion DATE NOT NULL DEFAULT CURRENT_DATE,
@@ -168,7 +168,7 @@ CREATE TABLE adulto_responsable (
 
 CREATE TABLE responsables_alumnos (
   dni_responsable VARCHAR(20) REFERENCES adulto_responsable(dni) ON DELETE CASCADE,
-  dni_alumno VARCHAR(20) REFERENCES alumno(dni) ON DELETE CASCADE,
+  dni_alumno VARCHAR(20) REFERENCES alumno(dni) ON UPDATE CASCADE ON DELETE CASCADE,
   PRIMARY KEY (dni_responsable, dni_alumno)
 );
 
@@ -184,7 +184,7 @@ CREATE TABLE usuario (
   contrasenia VARCHAR(255) NOT NULL,
   ultimo_acceso TIMESTAMP,
   estado VARCHAR(20) NOT NULL DEFAULT 'Activo',
-  dni_alumno VARCHAR(20) UNIQUE REFERENCES alumno(dni),
+  dni_alumno VARCHAR(20) UNIQUE REFERENCES alumno(dni) ON UPDATE CASCADE,
   dni_profesor VARCHAR(20) UNIQUE REFERENCES profesor(dni),
   dni_preceptor VARCHAR(20) UNIQUE REFERENCES preceptor(dni),
   dni_administrador VARCHAR(20) UNIQUE REFERENCES administrador(dni),
@@ -223,13 +223,13 @@ CREATE TABLE nota (
   fecha DATE NOT NULL DEFAULT CURRENT_DATE,
   tipo_evaluacion VARCHAR(30) NOT NULL,
   observacion TEXT,
-  dni_alumno VARCHAR(20) NOT NULL REFERENCES alumno(dni) ON DELETE CASCADE,
+  dni_alumno VARCHAR(20) NOT NULL REFERENCES alumno(dni) ON UPDATE CASCADE ON DELETE CASCADE,
   id_curso INTEGER NOT NULL,
   id_ciclo_lectivo INTEGER NOT NULL REFERENCES ciclo_lectivo(id_ciclo_lectivo),
   codigo_materia VARCHAR(20) NOT NULL REFERENCES materia(codigo),
   dni_profesor VARCHAR(20) REFERENCES profesor(dni),
   FOREIGN KEY (dni_alumno, id_curso, id_ciclo_lectivo)
-    REFERENCES alumno_curso(dni_alumno, id_curso, id_ciclo_lectivo),
+    REFERENCES alumno_curso(dni_alumno, id_curso, id_ciclo_lectivo) ON UPDATE CASCADE,
   UNIQUE (dni_alumno, codigo_materia, tipo_evaluacion, id_ciclo_lectivo)
 );
 
@@ -253,7 +253,7 @@ CREATE TABLE nota_individual (
   fecha DATE NOT NULL DEFAULT CURRENT_DATE,
   dni_profesor VARCHAR(20) REFERENCES profesor(dni),
   FOREIGN KEY (dni_alumno, id_curso, id_ciclo_lectivo)
-    REFERENCES alumno_curso(dni_alumno, id_curso, id_ciclo_lectivo) ON DELETE CASCADE,
+    REFERENCES alumno_curso(dni_alumno, id_curso, id_ciclo_lectivo) ON UPDATE CASCADE ON DELETE CASCADE,
   CHECK (estado <> 'No realizó' OR calificacion = 1)
 );
 
@@ -262,7 +262,7 @@ CREATE INDEX idx_nota_individual_contexto
 
 CREATE TABLE notificacion_alumno (
   id_notificacion SERIAL PRIMARY KEY,
-  dni_alumno VARCHAR(20) NOT NULL REFERENCES alumno(dni) ON DELETE CASCADE,
+  dni_alumno VARCHAR(20) NOT NULL REFERENCES alumno(dni) ON UPDATE CASCADE ON DELETE CASCADE,
   titulo VARCHAR(150) NOT NULL,
   mensaje TEXT NOT NULL,
   fecha TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
