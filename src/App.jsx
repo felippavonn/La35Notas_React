@@ -129,7 +129,11 @@ function App() {
     turno_id: "",
     materias: [],
   });
-  const [materiaForm, setMateriaForm] = useState({ codigo: "", nombre: "" });
+  const [materiaForm, setMateriaForm] = useState({
+    codigo: "",
+    nombre: "",
+    descripcion: "",
+  });
   const [newAlumno, setNewAlumno] = useState({
   dni: "",
   nombre: "",
@@ -686,7 +690,7 @@ function App() {
   }
 
   function openNewMateria() {
-    setMateriaForm({ codigo: "", nombre: "" });
+    setMateriaForm({ codigo: "", nombre: "", descripcion: "" });
     setModalMateria({ mode: "new" });
   }
 
@@ -694,6 +698,7 @@ function App() {
     setMateriaForm({
       codigo: materia.codigo,
       nombre: materia.nombre || "",
+      descripcion: materia.descripcion || "",
     });
     setModalMateria({ mode: "edit", materia });
   }
@@ -703,6 +708,7 @@ function App() {
     const isNew = modalMateria.mode === "new";
     const body = {
       nombre: materiaForm.nombre.trim(),
+      descripcion: materiaForm.descripcion.trim(),
     };
     if (isNew) body.codigo = materiaForm.codigo.trim().toUpperCase();
 
@@ -2181,6 +2187,21 @@ function App() {
                 required
               />
             </div>
+            <div className="field">
+              <label htmlFor="subject-description">Descripción</label>
+              <textarea
+                id="subject-description"
+                value={materiaForm.descripcion}
+                onChange={(event) =>
+                  setMateriaForm({
+                    ...materiaForm,
+                    descripcion: event.target.value,
+                  })
+                }
+                maxLength="1000"
+                rows="4"
+              />
+            </div>
             {modalMateria.mode === "edit" && (
               <div className="course-delete-warning" role="note">
                 El nombre se comparte entre todos los ciclos. Esta acción quita
@@ -3185,6 +3206,9 @@ function MateriasPage({
               <div>
                 <div className="materia-name">{materia.nombre}</div>
                 <div className="materia-prof">Código: {materia.codigo}</div>
+                <div className="materia-prof">
+                  {materia.descripcion || "Sin descripción"}
+                </div>
               </div>
               <span className="badge badge-blue">
                 {materia.profesores.length}{" "}

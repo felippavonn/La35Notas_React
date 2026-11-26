@@ -24,7 +24,8 @@ INSERT INTO especialidad (nombre) VALUES ('Automotores'), ('Computación');
 
 CREATE TABLE materia (
   codigo VARCHAR(20) PRIMARY KEY,
-  nombre VARCHAR(100) NOT NULL
+  nombre VARCHAR(100) NOT NULL,
+  descripcion TEXT NOT NULL DEFAULT '' CHECK (CHAR_LENGTH(descripcion) <= 1000)
 );
 
 INSERT INTO materia (codigo, nombre) VALUES
@@ -126,7 +127,9 @@ CREATE TABLE alumno_curso (
 CREATE UNIQUE INDEX idx_alumno_curso_vigente
   ON alumno_curso(dni_alumno, id_ciclo_lectivo)
   WHERE fecha_baja IS NULL;
-CREATE INDEX idx_alumno_curso_ciclo ON alumno_curso(id_ciclo_lectivo, id_curso);
+
+CREATE INDEX idx_alumno_curso_ciclo
+  ON alumno_curso(id_ciclo_lectivo, id_curso);
 
 CREATE TABLE profesor (
   dni VARCHAR(20) PRIMARY KEY,
@@ -233,9 +236,14 @@ CREATE TABLE nota (
   UNIQUE (dni_alumno, codigo_materia, tipo_evaluacion, id_ciclo_lectivo)
 );
 
-CREATE INDEX idx_nota_alumno ON nota(dni_alumno);
-CREATE INDEX idx_nota_materia ON nota(codigo_materia);
-CREATE INDEX idx_nota_ciclo_fecha ON nota(id_ciclo_lectivo, fecha DESC, id_nota DESC);
+CREATE INDEX idx_nota_alumno
+  ON nota(dni_alumno);
+
+CREATE INDEX idx_nota_materia
+  ON nota(codigo_materia);
+
+CREATE INDEX idx_nota_ciclo_fecha
+  ON nota(id_ciclo_lectivo, fecha DESC, id_nota DESC);
 
 CREATE TABLE nota_individual (
   id_nota_individual SERIAL PRIMARY KEY,
@@ -268,9 +276,11 @@ CREATE TABLE notificacion_alumno (
   fecha TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE INDEX idx_notificacion_alumno_fecha ON notificacion_alumno(dni_alumno, fecha DESC);
+CREATE INDEX idx_notificacion_alumno_fecha
+  ON notificacion_alumno(dni_alumno, fecha DESC);
 
 INSERT INTO ciclo_lectivo (anio) VALUES (2026);
+
 INSERT INTO ciclo_materia (id_ciclo_lectivo, codigo_materia)
 SELECT cl.id_ciclo_lectivo, m.codigo
 FROM ciclo_lectivo cl CROSS JOIN materia m
@@ -285,10 +295,13 @@ WHERE cl.anio = 2026;
 
 INSERT INTO administrador (dni, nombre, apellido, email, cargo)
 VALUES ('1', 'Admin', 'Sistema', 'admin@gestionnotas.test', 'Regente');
+
 INSERT INTO preceptor (dni, nombre, apellido, email)
 VALUES ('2', 'Preceptor', 'Demo', 'preceptor@gestionnotas.test');
+
 INSERT INTO profesor (dni, nombre, apellido, email)
 VALUES ('3', 'Profesor', 'Demo', 'profesor@gestionnotas.test');
+
 INSERT INTO alumno (dni, nombre, apellido, email)
 VALUES ('4', 'Alumno', 'Demo', 'alumno@gestionnotas.test');
 
@@ -300,15 +313,22 @@ INSERT INTO rol (nombre, descripcion) VALUES
 
 INSERT INTO usuario (nombre_usuario, contrasenia, estado, dni_administrador, id_rol)
 SELECT '1', crypt('1', gen_salt('bf', 10)), 'Activo', '1', id_rol
-FROM rol WHERE nombre = 'admin';
+FROM rol
+WHERE nombre = 'admin';
+
 INSERT INTO usuario (nombre_usuario, contrasenia, estado, dni_preceptor, id_rol)
 SELECT '2', crypt('2', gen_salt('bf', 10)), 'Activo', '2', id_rol
-FROM rol WHERE nombre = 'preceptor';
+FROM rol
+WHERE nombre = 'preceptor';
+
 INSERT INTO usuario (nombre_usuario, contrasenia, estado, dni_profesor, id_rol)
 SELECT '3', crypt('3', gen_salt('bf', 10)), 'Activo', '3', id_rol
-FROM rol WHERE nombre = 'profesor';
+FROM rol
+WHERE nombre = 'profesor';
+
 INSERT INTO usuario (nombre_usuario, contrasenia, estado, dni_alumno, id_rol)
 SELECT '4', crypt('4', gen_salt('bf', 10)), 'Activo', '4', id_rol
-FROM rol WHERE nombre = 'alumno';
+FROM rol
+WHERE nombre = 'alumno';
 
 COMMIT;

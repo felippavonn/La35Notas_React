@@ -2536,7 +2536,7 @@ app.get("/api/materias", auth, async (req, res) => {
     if (!cycleId) return res.json([]);
     const { rows } = await pool.query(
       `
-      SELECT m.codigo, m.nombre,
+      SELECT m.codigo, m.nombre, m.descripcion,
              COALESCE(
                (
                  SELECT json_agg(json_build_object(
@@ -2588,7 +2588,8 @@ app.get("/api/materias/catalogo", auth, roles("admin"), async (req, res) => {
     if (!cycleId) return res.json([]);
     const { rows } = await pool.query(
       `
-      SELECT m.codigo, m.nombre, cm.codigo_materia IS NOT NULL AS asignada
+      SELECT m.codigo, m.nombre, m.descripcion,
+             cm.codigo_materia IS NOT NULL AS asignada
       FROM materia m
       LEFT JOIN ciclo_materia cm ON cm.codigo_materia=m.codigo
         AND cm.id_ciclo_lectivo=$1
@@ -2647,6 +2648,8 @@ app.post("/api/materias", auth, roles("admin"), async (req, res) => {
       : "";
   const nombre =
     typeof req.body.nombre === "string" ? req.body.nombre.trim() : "";
+  const descripcion =
+    typeof req.body.descripcion === "string" ? req.body.descripcion.trim() : "";
 
   if (!/^[A-Z0-9_-]{2,20}$/.test(codigo)) {
     return fail(
@@ -2657,6 +2660,8 @@ app.post("/api/materias", auth, roles("admin"), async (req, res) => {
   }
   if (!nombre || nombre.length > 100)
     return fail(res, 400, "El nombre de la materia no es válido");
+  if (descripcion.length > 1000)
+    return fail(res, 400, "La descripción no puede superar los 1000 caracteres");
 
   const client = await pool.connect();
   try {
@@ -2672,7 +2677,7 @@ app.post("/api/materias", auth, roles("admin"), async (req, res) => {
     );
     const { rows: existingName } = await client.query(
       `
-      SELECT codigo, nombre
+      SELECT codigo, nombre, descripcion
       FROM materia
       WHERE LOWER(BTRIM(nombre))=LOWER(BTRIM($1))
       ORDER BY codigo
@@ -2695,11 +2700,11 @@ app.post("/api/materias", auth, roles("admin"), async (req, res) => {
     }
     const { rows } = await client.query(
       `
-      INSERT INTO materia (codigo, nombre)
-      VALUES ($1,$2)
-      RETURNING codigo, nombre
+      INSERT INTO materia (codigo, nombre, descripcion)
+      VALUES ($1,$2,$3)
+      RETURNING codigo, nombre, descripcion
     `,
-      [codigo, nombre],
+      [codigo, nombre, descripcion],
     );
     await client.query(
       `
@@ -2725,11 +2730,15 @@ app.put("/api/materias/:codigo", auth, roles("admin"), async (req, res) => {
   const { codigo } = req.params;
   const nombre =
     typeof req.body.nombre === "string" ? req.body.nombre.trim() : "";
+  const descripcion =
+    typeof req.body.descripcion === "string" ? req.body.descripcion.trim() : "";
 
   if (!/^[A-Z0-9_-]{2,20}$/.test(codigo))
     return fail(res, 400, "El código de la materia no es válido");
   if (!nombre || nombre.length > 100)
     return fail(res, 400, "El nombre de la materia no es válido");
+  if (descripcion.length > 1000)
+    return fail(res, 400, "La descripción no puede superar los 1000 caracteres");
 
   try {
     const duplicate = await pool.query(
@@ -2750,11 +2759,11 @@ app.put("/api/materias/:codigo", auth, roles("admin"), async (req, res) => {
     const { rows } = await pool.query(
       `
       UPDATE materia
-      SET nombre=$2
+      SET nombre=$2, descripcion=$3
       WHERE codigo=$1
-      RETURNING codigo, nombre
+      RETURNING codigo, nombre, descripcion
     `,
-      [codigo, nombre],
+      [codigo, nombre, descripcion],
     );
     if (!rows[0]) return fail(res, 404, "Materia no encontrada");
     res.json(rows[0]);

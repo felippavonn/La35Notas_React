@@ -59,6 +59,7 @@ aplicación compilada.
    node scripts/init-db.cjs
    ```
 
+
 El esquema no contiene migraciones y no actualiza bases existentes. Antes de
 usar estos cambios en una instalación previa, realizá una copia de seguridad y
 prepará la migración correspondiente.
