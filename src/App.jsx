@@ -9,6 +9,7 @@ import {
   logout,
   setActiveCycleYear,
 } from "./services/api";
+import { getDefinitiveGrade } from "./utils/gradeCalculations";
 
 const ROLE_LABELS = {
   admin: "Administrador",
@@ -4345,6 +4346,7 @@ function BulletinHistory({ bulletin, showStudentName = true, onPdfError }) {
                       {BULLETIN_PERIODS.map(([, label]) => (
                         <th key={label}>{label}</th>
                       ))}
+                      <th>Calificación definitiva</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -4376,6 +4378,7 @@ function BulletinHistory({ bulletin, showStudentName = true, onPdfError }) {
                             </td>
                           );
                         })}
+                        <td>{getDefinitiveGrade(materia) || "—"}</td>
                       </tr>
                     ))}
                     {!curso.materias?.length && (

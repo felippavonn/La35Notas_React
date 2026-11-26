@@ -2,6 +2,7 @@ import { jsPDF } from "jspdf";
 import autoTable from "jspdf-autotable";
 import shieldImage from "../assets/escudo.png";
 import cityShieldImage from "../assets/escudoCABA.png";
+import { formatGrade, getDefinitiveGrade } from "./gradeCalculations";
 
 const periods = [
   ["BIMESTRE_1", "1° Bimestre"],
@@ -14,8 +15,6 @@ const periods = [
   ["DICIEMBRE", "2° Cierre"],
   ["FEBRERO", "3° Cierre"],
 ];
-
-const closurePeriods = ["FEBRERO", "DICIEMBRE", "FINAL"];
 
 // --------------------------------------------------
 // CARGAR IMAGEN
@@ -37,30 +36,12 @@ function loadImage(src) {
 // FUNCIONES DE CALIFICACIONES
 // --------------------------------------------------
 
-function displayGrade(value) {
-  return value == null || value === "" ? "" : String(Number(value));
-}
-
 function gradeForPeriod(subject, period) {
-  return displayGrade(
+  return formatGrade(
     subject.notas?.find(
       (grade) => grade.tipo_evaluacion === period,
     )?.calificacion,
   );
-}
-
-function definitiveGrade(subject) {
-  for (const period of closurePeriods) {
-    const grade = subject.notas?.find(
-      (note) => note.tipo_evaluacion === period,
-    )?.calificacion;
-
-    if (grade != null && grade !== "") {
-      return displayGrade(grade);
-    }
-  }
-
-  return "";
 }
 
 // --------------------------------------------------
@@ -346,7 +327,7 @@ export async function createBulletinPdfDocument(student, cycle) {
     ...periods.map(([period]) =>
       gradeForPeriod(subject, period),
     ),
-    definitiveGrade(subject),
+    getDefinitiveGrade(subject),
   ]);
 
   const emptyRow = [
