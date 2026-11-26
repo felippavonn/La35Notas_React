@@ -488,7 +488,7 @@ function App() {
         });
         pushToast("Alumno guardado");
       } else {
-        await apiFetch(`/alumnos/${encodeURIComponent(newAlumno.dni)}`, {
+        await apiFetch(`/alumnos/${encodeURIComponent(modalAlumno.alumno.dni)}`, {
           method: "PUT",
           body: JSON.stringify(body),
         });
@@ -1460,16 +1460,19 @@ function App() {
               {modalAlumno.mode === "new" ? "Nuevo alumno" : "Editar alumno"}
             </div>
             <div className="field">
-              <label>DNI</label>
-              <input
-                value={newAlumno.dni}
-                onChange={(e) =>
-                  setNewAlumno({ ...newAlumno, dni: e.target.value })
-                }
-                disabled={modalAlumno.mode === "edit"}
-                required
-              />
-            </div>
+            <label>DNI</label>
+            <input
+              type="text"
+              inputMode="numeric"
+              pattern="[0-9]{1,20}"
+              maxLength={20}
+              value={newAlumno.dni}
+              onChange={(e) =>
+                setNewAlumno({ ...newAlumno, dni: e.target.value })
+              }
+              required
+            />
+          </div>
             <div className="field">
               <label>Apellido</label>
               <input

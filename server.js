@@ -698,10 +698,19 @@ app.put(
   auth,
   roles("admin", "preceptor"),
   async (req, res) => {
-   const { dni } = req.params;
-const body = req.body || {};
+    const dniAnterior = String(req.params.dni || "").trim();
+    const body = req.body || {};
+    const dniNuevo = String(body.dni ?? dniAnterior).trim();
+    let dni = dniAnterior;
 
-const { nombre, apellido, email, estado, id_curso } = body;
+    if (
+      !/^\d{1,20}$/.test(dniAnterior) ||
+      !/^\d{1,20}$/.test(dniNuevo)
+    ) {
+      return fail(res, 400, "El DNI debe contener entre 1 y 20 números");
+    }
+
+    const { nombre, apellido, email, estado, id_curso } = body;
 
 const camposDomicilio = [
   "calle",
@@ -754,6 +763,35 @@ const client = await pool.connect();
 
     try {
       await client.query("BEGIN");
+
+            if (dniNuevo !== dniAnterior) {
+        const { rows: conflictoUsuario } = await client.query(
+          `
+          SELECT 1
+          FROM usuario
+          WHERE (
+            nombre_usuario = $1
+            OR dni_alumno = $1
+            OR dni_profesor = $1
+            OR dni_preceptor = $1
+            OR dni_administrador = $1
+          )
+          AND dni_alumno IS DISTINCT FROM $2
+          LIMIT 1
+          `,
+          [dniNuevo, dniAnterior],
+        );
+
+        if (conflictoUsuario[0]) {
+          await client.query("ROLLBACK");
+          return fail(
+            res,
+            409,
+            "El nuevo DNI ya está siendo utilizado por otra cuenta",
+          );
+        }
+      }
+
       const { rows: alumnoActual } = await client.query(
         "SELECT estado, id_domicilio FROM alumno WHERE dni=$1 FOR UPDATE",
         [dni],
@@ -770,20 +808,36 @@ const client = await pool.connect();
       const { rows } = await client.query(
         `
       UPDATE alumno
-      SET nombre=COALESCE($2,nombre),
-          apellido=COALESCE($3,apellido),
-          email=COALESCE($4,email),
-          estado=COALESCE($5,estado)
+      SET dni=$2,
+      nombre=COALESCE($3,nombre),
+      apellido=COALESCE($4,apellido),
+      email=COALESCE($5,email),
+      estado=COALESCE($6,estado)
       WHERE dni=$1
       RETURNING *
     `,
-        [dni, nombre, apellido, email, estado],
+        [dniAnterior, dniNuevo, nombre, apellido, email, estado],
       );
 
       if (!rows[0]) {
         await client.query("ROLLBACK");
         return fail(res, 404, "Alumno no encontrado");
       }
+
+      dni = dniNuevo;
+
+      if (dniNuevo !== dniAnterior) {
+        const nuevaContrasenia = await bcrypt.hash(String(dniNuevo), 10);
+
+        await client.query(
+          `UPDATE usuario
+          SET nombre_usuario=$2,
+              contrasenia=$3
+          WHERE dni_alumno=$1`,
+          [dniNuevo, dniNuevo, nuevaContrasenia],
+        );
+      }
+
 
       if (domicilioEnviado) {
   const domicilioAnteriorId = alumnoActual[0].id_domicilio;
@@ -1046,14 +1100,20 @@ const client = await pool.connect();
           }
         }
       }
-      await syncPersonAccount(
+      const account = await syncPersonAccount(
         client,
         dni,
         "alumno",
         "dni_alumno",
         true,
       );
+
       await client.query("COMMIT");
+
+      if (dniNuevo !== dniAnterior) {
+        revokeAccountSessions(account.userId);
+      }
+
       res.json(rows[0]);
     } catch (error) {
       await client.query("ROLLBACK");
@@ -1063,6 +1123,15 @@ const client = await pool.connect();
         error.code,
         error.detail,
       );
+
+        if (error.code === "23505") {
+        return fail(
+          res,
+          409,
+          "El DNI ya está registrado o está siendo utilizado por otra cuenta",
+        );
+      }
+
       fail(res, 400, "No se pudo modificar el alumno");
     } finally {
       client.release();
