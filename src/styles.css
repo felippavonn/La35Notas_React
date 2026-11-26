@@ -170,6 +170,49 @@ body {
   accent-color: var(--accent);
 }
 
+.permissions-modal {
+  max-width: 560px;
+}
+.permissions-options {
+  display: grid;
+  gap: 10px;
+}
+.permission-option {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 56px;
+  padding: 12px 14px;
+  border: 1.5px solid var(--border);
+  border-radius: 10px;
+  background: var(--cream);
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color .15s, background .15s, transform .1s;
+}
+.permission-option:hover {
+  border-color: var(--accent);
+  background: var(--accent-lt);
+}
+.permission-option:has(input:checked) {
+  border-color: var(--accent);
+  background: var(--accent-lt);
+  box-shadow: inset 0 0 0 1px rgba(180, 35, 24, .12);
+}
+.permission-option input {
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  accent-color: var(--accent);
+  flex: 0 0 auto;
+}
+.permission-option:focus-within {
+  outline: 3px solid rgba(180, 35, 24, .2);
+  outline-offset: 2px;
+}
+
 /*botones*/
 .btn-primary {
   width: 100%;

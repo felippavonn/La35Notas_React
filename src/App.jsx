@@ -8,6 +8,7 @@ import {
   login,
   logout,
   setActiveCycleYear,
+  setStoredUser,
 } from "./services/api";
 import { getDefinitiveGrade } from "./utils/gradeCalculations";
 
@@ -161,10 +162,13 @@ function App() {
   const [notificarNotaGeneral, setNotificarNotaGeneral] = useState(true);
 
   const isAlumno = session?.rol === "alumno";
+  const preceptorPermissions = session?.permisos || [];
   const canManageStudents =
-    session?.rol === "admin" || session?.rol === "preceptor";
+    session?.rol === "admin" ||
+    preceptorPermissions.some((item) => item.startsWith("alumnos."));
   const canManageTeachers =
-    session?.rol === "admin" || session?.rol === "preceptor";
+    session?.rol === "admin" ||
+    preceptorPermissions.some((item) => item.startsWith("docentes."));
   const canManageCourses = session?.rol === "admin";
   const isTeacherOnLeave =
     session?.rol === "profesor" &&
@@ -197,6 +201,11 @@ function App() {
     setLoading(true);
     setGlobalError("");
     try {
+      const currentSession = await apiFetch("/me");
+      if (JSON.stringify(currentSession) !== JSON.stringify(session)) {
+        setStoredUser(currentSession);
+        setSession(currentSession);
+      }
       const ciclosData = await apiFetch("/ciclos-lectivos");
       const latestCycleYear = ciclosData[0]?.anio || null;
       const cycleYear =
@@ -493,9 +502,21 @@ function App() {
         });
         pushToast("Alumno guardado");
       } else {
-        await apiFetch(`/alumnos/${encodeURIComponent(modalAlumno.alumno.dni)}`, {
-          method: "PUT",
-          body: JSON.stringify(body),
+        if (session?.rol === "preceptor") {
+          const requests = [];
+          if (preceptorPermissions.includes("alumnos.editar_datos"))
+            requests.push(apiFetch(`/alumnos/${encodeURIComponent(modalAlumno.alumno.dni)}/datos`, {
+              method: "PATCH",
+              body: JSON.stringify(body),
+            }));
+          if (preceptorPermissions.includes("alumnos.cambiar_estado"))
+            requests.push(apiFetch(`/alumnos/${encodeURIComponent(modalAlumno.alumno.dni)}/estado`, {
+              method: "PATCH",
+              body: JSON.stringify({ estado: body.estado }),
+            }));
+          await Promise.all(requests);
+        } else await apiFetch(`/alumnos/${encodeURIComponent(modalAlumno.alumno.dni)}`, {
+          method: "PUT", body: JSON.stringify(body),
         });
         pushToast("Alumno actualizado");
       }
@@ -575,7 +596,18 @@ function App() {
     event.preventDefault();
     const isNew = modalDocente.mode === "new";
     try {
-      await apiFetch(
+      if (session?.rol === "preceptor" && !isNew) {
+        const requests = [];
+        if (preceptorPermissions.includes("docentes.editar_datos"))
+          requests.push(apiFetch(`/docentes/${encodeURIComponent(modalDocente.docente.dni)}/datos`, {
+            method: "PATCH", body: JSON.stringify(docenteForm),
+          }));
+        if (preceptorPermissions.includes("docentes.cambiar_estado"))
+          requests.push(apiFetch(`/docentes/${encodeURIComponent(modalDocente.docente.dni)}/estado`, {
+            method: "PATCH", body: JSON.stringify({ estado: docenteForm.estado }),
+          }));
+        await Promise.all(requests);
+      } else await apiFetch(
         isNew
           ? "/docentes"
           : `/docentes/${encodeURIComponent(modalDocente.docente.dni)}`,
@@ -3471,6 +3503,7 @@ function PersonalAdminPage({
   const singular = resource === "preceptores" ? "preceptor" : "administrador";
   const [records, setRecords] = useState([]);
   const [modal, setModal] = useState(null);
+  const [permissionModal, setPermissionModal] = useState(null);
   const [form, setForm] = useState({
     dni: "",
     apellido: "",
@@ -3600,6 +3633,23 @@ function PersonalAdminPage({
     }
   }
 
+  async function editPermissions(person) {
+    try {
+      const current = await apiFetch(`/preceptores/${encodeURIComponent(person.dni)}/permisos`);
+      setPermissionModal({ person, permisos: current });
+    } catch (error) { pushToast(error.message, "warn"); }
+  }
+
+  async function savePermissions() {
+    try {
+      await apiFetch(`/preceptores/${encodeURIComponent(permissionModal.person.dni)}/permisos`, {
+        method: "PUT", body: JSON.stringify({ permisos: permissionModal.permisos }),
+      });
+      setPermissionModal(null);
+      pushToast("Permisos actualizados");
+    } catch (error) { pushToast(error.message, "warn"); }
+  }
+
   return (
     <>
       <div className="section-header">
@@ -3671,6 +3721,11 @@ function PersonalAdminPage({
                           >
                             Editar
                           </button>
+                          {resource === "preceptores" && (
+                            <button type="button" className="btn btn-ghost btn-sm" onClick={() => editPermissions(person)}>
+                              Permisos
+                            </button>
+                          )}
                         </div>
                       </td>
                     </tr>
@@ -3781,7 +3836,7 @@ function PersonalAdminPage({
                   value="Baja"
                   disabled={
                     resource === "administradores" &&
-                    String(modal.person.dni) === String(currentAdminDni)
+                    String(modal.person?.dni) === String(currentAdminDni)
                   }
                 >
                   Baja
@@ -3820,7 +3875,7 @@ function PersonalAdminPage({
                   onClick={() => remove(modal.person)}
                   disabled={
                     resource === "administradores" &&
-                    String(modal.person.dni) === String(currentAdminDni)
+                    String(modal.person?.dni) === String(currentAdminDni)
                   }
                 >
                   Eliminar
@@ -3840,7 +3895,43 @@ function PersonalAdminPage({
           </form>
         </div>
       )}
+      {permissionModal && (
+        <PreceptorPermissionsModal
+          modal={permissionModal}
+          setModal={setPermissionModal}
+          onSave={savePermissions}
+        />
+      )}
     </>
+  );
+}
+
+function PreceptorPermissionsModal({ modal, setModal, onSave }) {
+  const options = [
+    ["alumnos.editar_datos", "Editar datos de alumnos"],
+    ["alumnos.cambiar_estado", "Cambiar estado de alumnos"],
+    ["docentes.editar_datos", "Editar datos de docentes"],
+    ["docentes.cambiar_estado", "Cambiar estado de docentes"],
+  ];
+  return (
+    <div className="modal-overlay open" onMouseDown={(event) => event.target === event.currentTarget && setModal(null)}>
+      <div className="modal permissions-modal">
+        <div className="modal-title">Permisos de preceptor</div>
+        <div className="modal-sub">{modal.person.apellido}, {modal.person.nombre}</div>
+        <div className="permissions-options">
+          {options.map(([code, label]) => (
+            <label className="permission-option" key={code}>
+              <input type="checkbox" checked={modal.permisos.includes(code)} onChange={(event) => setModal((current) => ({ ...current, permisos: event.target.checked ? [...current.permisos, code] : current.permisos.filter((item) => item !== code) }))} />
+              {label}
+            </label>
+          ))}
+        </div>
+        <div className="modal-footer">
+          <button type="button" className="btn btn-ghost" onClick={() => setModal(null)}>Cancelar</button>
+          <button type="button" className="btn btn-blue" onClick={onSave}>Guardar permisos</button>
+        </div>
+      </div>
+    </div>
   );
 }
 

@@ -195,6 +195,15 @@ CREATE TABLE usuario (
   CHECK (num_nonnulls(dni_alumno, dni_profesor, dni_preceptor, dni_administrador) <= 1)
 );
 
+CREATE TABLE preceptor_permiso (
+  dni_preceptor VARCHAR(20) NOT NULL REFERENCES preceptor(dni) ON DELETE CASCADE,
+  codigo VARCHAR(40) NOT NULL CHECK (codigo IN (
+    'alumnos.editar_datos', 'alumnos.cambiar_estado',
+    'docentes.editar_datos', 'docentes.cambiar_estado'
+  )),
+  PRIMARY KEY (dni_preceptor, codigo)
+);
+
 CREATE TABLE profesor_rol (
   dni_profesor VARCHAR(20) REFERENCES profesor(dni) ON DELETE CASCADE,
   id_rol INTEGER REFERENCES rol(id_rol) ON DELETE CASCADE,

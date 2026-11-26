@@ -192,6 +192,23 @@ function roles(...allowed) {
   };
 }
 
+const PRECEPTOR_PERMISSIONS = new Set([
+  "alumnos.editar_datos",
+  "alumnos.cambiar_estado",
+  "docentes.editar_datos",
+  "docentes.cambiar_estado",
+]);
+
+async function hasPreceptorPermission(user, permission) {
+  if (user.rol === "admin") return true;
+  if (user.rol !== "preceptor" || !user.dni_preceptor) return false;
+  const { rows } = await pool.query(
+    "SELECT 1 FROM preceptor_permiso WHERE dni_preceptor=$1 AND codigo=$2",
+    [user.dni_preceptor, permission],
+  );
+  return Boolean(rows[0]);
+}
+
 async function replaceCourseSubjects(client, courseId, cycleId, subjectCodes) {
   if (
     !Array.isArray(subjectCodes) ||
@@ -304,7 +321,14 @@ app.post("/api/logout", auth, (req, res) => {
   res.json({ ok: true });
 });
 
-app.get("/api/me", auth, (req, res) => res.json(req.user));
+app.get("/api/me", auth, async (req, res) => {
+  if (req.user.rol !== "preceptor") return res.json({ ...req.user, permisos: [] });
+  const { rows } = await pool.query(
+    "SELECT codigo FROM preceptor_permiso WHERE dni_preceptor=$1",
+    [req.user.dni_preceptor],
+  );
+  res.json({ ...req.user, permisos: rows.map((row) => row.codigo) });
+});
 
 app.get("/api/dashboard", auth, async (req, res) => {
   try {
@@ -571,7 +595,7 @@ app.get("/api/mis-boletines", auth, roles("alumno"), async (req, res) => {
 app.post(
   "/api/alumnos",
   auth,
-  roles("admin", "preceptor"),
+  roles("admin"),
   async (req, res) => {
   const body = req.body || {};
 
@@ -696,7 +720,7 @@ app.post(
 app.put(
   "/api/alumnos/:dni",
   auth,
-  roles("admin", "preceptor"),
+  roles("admin"),
   async (req, res) => {
     const dniAnterior = String(req.params.dni || "").trim();
     const body = req.body || {};
@@ -1142,7 +1166,7 @@ const client = await pool.connect();
 app.delete(
   "/api/alumnos/:dni",
   auth,
-  roles("admin", "preceptor"),
+  roles("admin"),
   async (req, res) => {
     const { dni } = req.params;
     const client = await pool.connect();
@@ -1487,7 +1511,7 @@ async function replaceTeacherAssignments(client, dni, assignments, cycleId) {
 app.post(
   "/api/docentes",
   auth,
-  roles("admin", "preceptor"),
+  roles("admin"),
   async (req, res) => {
     const validationError = validateDocente(req.body);
     if (validationError) return fail(res, 400, validationError);
@@ -1547,7 +1571,7 @@ app.post(
 app.put(
   "/api/docentes/:dni",
   auth,
-  roles("admin", "preceptor"),
+  roles("admin"),
   async (req, res) => {
     const { dni } = req.params;
     if (String(req.body.dni) !== dni)
@@ -1625,7 +1649,7 @@ app.put(
 app.delete(
   "/api/docentes/:dni",
   auth,
-  roles("admin", "preceptor"),
+  roles("admin"),
   async (req, res) => {
     const { dni } = req.params;
     const client = await pool.connect();
@@ -1973,6 +1997,86 @@ registerPersonnelRoutes({
   role: "admin",
   dniColumn: "dni_administrador",
   includeCargo: true,
+});
+
+app.get("/api/preceptores/:dni/permisos", auth, roles("admin"), async (req, res) => {
+  const { rows } = await pool.query(
+    "SELECT codigo FROM preceptor_permiso WHERE dni_preceptor=$1 ORDER BY codigo",
+    [req.params.dni],
+  );
+  res.json(rows.map((row) => row.codigo));
+});
+
+app.put("/api/preceptores/:dni/permisos", auth, roles("admin"), async (req, res) => {
+  const permisos = req.body?.permisos;
+  if (!Array.isArray(permisos) || permisos.some((item) => !PRECEPTOR_PERMISSIONS.has(item)))
+    return fail(res, 400, "La lista de permisos no es válida");
+  const unique = [...new Set(permisos)];
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const exists = await client.query("SELECT 1 FROM preceptor WHERE dni=$1", [req.params.dni]);
+    if (!exists.rows[0]) throw new Error("Preceptor no encontrado");
+    await client.query("DELETE FROM preceptor_permiso WHERE dni_preceptor=$1", [req.params.dni]);
+    for (const codigo of unique)
+      await client.query("INSERT INTO preceptor_permiso (dni_preceptor, codigo) VALUES ($1,$2)", [req.params.dni, codigo]);
+    await client.query("COMMIT");
+    res.json({ permisos: unique });
+  } catch (error) {
+    await client.query("ROLLBACK");
+    fail(res, error.message === "Preceptor no encontrado" ? 404 : 400, error.message || "No se pudieron actualizar los permisos");
+  } finally { client.release(); }
+});
+
+app.patch("/api/docentes/:dni/datos", auth, async (req, res) => {
+  if (!(await hasPreceptorPermission(req.user, "docentes.editar_datos")))
+    return fail(res, 403, "No tenés permiso para editar datos de docentes");
+  const { nombre, apellido, email, telefono } = req.body || {};
+  if (!String(nombre || "").trim() || !String(apellido || "").trim())
+    return fail(res, 400, "El nombre y apellido son obligatorios");
+  const { rows } = await pool.query(
+    "UPDATE profesor SET nombre=$2, apellido=$3, email=$4, telefono=$5 WHERE dni=$1 RETURNING dni",
+    [req.params.dni, String(nombre).trim(), String(apellido).trim(), String(email || "").trim() || null, String(telefono || "").trim() || null],
+  );
+  if (!rows[0]) return fail(res, 404, "Docente no encontrado");
+  res.json({ ok: true });
+});
+
+app.patch("/api/docentes/:dni/estado", auth, async (req, res) => {
+  if (!(await hasPreceptorPermission(req.user, "docentes.cambiar_estado")))
+    return fail(res, 403, "No tenés permiso para cambiar el estado de docentes");
+  const { estado } = req.body || {};
+  if (!["Activo", "Baja"].includes(estado))
+    return fail(res, 400, "Un preceptor solo puede establecer Activo o Baja");
+  const { rows } = await pool.query("UPDATE profesor SET estado=$2 WHERE dni=$1 RETURNING dni", [req.params.dni, estado]);
+  if (!rows[0]) return fail(res, 404, "Docente no encontrado");
+  await pool.query("UPDATE usuario SET estado=$2 WHERE dni_profesor=$1", [req.params.dni, estado]);
+  res.json({ ok: true });
+});
+
+app.patch("/api/alumnos/:dni/datos", auth, async (req, res) => {
+  if (!(await hasPreceptorPermission(req.user, "alumnos.editar_datos")))
+    return fail(res, 403, "No tenés permiso para editar datos de alumnos");
+  const { nombre, apellido, email } = req.body || {};
+  if (!String(nombre || "").trim() || !String(apellido || "").trim())
+    return fail(res, 400, "El nombre y apellido son obligatorios");
+  const { rows } = await pool.query(
+    "UPDATE alumno SET nombre=$2, apellido=$3, email=$4 WHERE dni=$1 RETURNING dni",
+    [req.params.dni, String(nombre).trim(), String(apellido).trim(), String(email || "").trim() || null],
+  );
+  if (!rows[0]) return fail(res, 404, "Alumno no encontrado");
+  res.json({ ok: true });
+});
+
+app.patch("/api/alumnos/:dni/estado", auth, async (req, res) => {
+  if (!(await hasPreceptorPermission(req.user, "alumnos.cambiar_estado")))
+    return fail(res, 403, "No tenés permiso para cambiar el estado de alumnos");
+  const { estado } = req.body || {};
+  if (!['Activo', 'Egresado', 'Baja', 'Suspendido', 'Transferido', 'No corresponde'].includes(estado))
+    return fail(res, 400, "El estado del alumno no es válido");
+  const { rows } = await pool.query("UPDATE alumno SET estado=$2 WHERE dni=$1 RETURNING dni", [req.params.dni, estado]);
+  if (!rows[0]) return fail(res, 404, "Alumno no encontrado");
+  res.json({ ok: true });
 });
 
 app.get("/api/cursos", auth, async (req, res) => {
