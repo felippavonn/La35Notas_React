@@ -519,27 +519,36 @@ function App() {
     setModalAlumno({ mode: "new" });
   }
 
+  function openAlumnoDetails(alumno, mode) {
+    setNewAlumno({
+      dni: alumno.dni,
+      nombre: alumno.nombre || "",
+      apellido: alumno.apellido || "",
+      email: alumno.email || "",
+      fecha_nacimiento: alumno.fecha_nacimiento || "",
+      genero: alumno.genero || "",
+      nacionalidad: alumno.nacionalidad || "",
+      calle: alumno.calle || "",
+      numero_calle: alumno.numero_calle || "",
+      departamento: alumno.departamento || "",
+      localidad: alumno.localidad || "",
+      id_curso: alumno.estado === "Activo" ? alumno.id_curso || "" : "",
+      estado: alumno.estado || "Activo",
+    });
+    setModalAlumno({ mode, alumno });
+  }
+
   function openEditAlumno(alumno) {
-  setNewAlumno({
-    dni: alumno.dni,
-    nombre: alumno.nombre || "",
-    apellido: alumno.apellido || "",
-    email: alumno.email || "",
-    fecha_nacimiento: alumno.fecha_nacimiento || "",
-    genero: alumno.genero || "",
-    nacionalidad: alumno.nacionalidad || "",
-    calle: alumno.calle || "",
-    numero_calle: alumno.numero_calle || "",
-    departamento: alumno.departamento || "",
-    localidad: alumno.localidad || "",
-    id_curso: alumno.estado === "Activo" ? alumno.id_curso || "" : "",
-    estado: alumno.estado || "Activo",
-  });
-  setModalAlumno({ mode: "edit", alumno });
-}
+    openAlumnoDetails(alumno, "edit");
+  }
+
+  function openViewAlumno(alumno) {
+    openAlumnoDetails(alumno, "view");
+  }
 
   async function saveAlumno(event) {
     event.preventDefault();
+    if (modalAlumno?.mode === "view") return;
     try {
       const body = {
           dni: newAlumno.dni.trim(),
@@ -1469,6 +1478,7 @@ function App() {
               canAddStudent={canAssignStudentCourse}
               openNewAlumno={openNewAlumno}
               openEditAlumno={openEditAlumno}
+              openViewAlumno={openViewAlumno}
             />
           )}
 
@@ -1594,7 +1604,11 @@ function App() {
         >
           <form className="modal" onSubmit={saveAlumno}>
             <div className="modal-title">
-              {modalAlumno.mode === "new" ? "Nuevo alumno" : "Editar alumno"}
+              {modalAlumno.mode === "new"
+                ? "Nuevo alumno"
+                : modalAlumno.mode === "view"
+                  ? "Más info"
+                  : "Editar alumno"}
             </div>
             <div className="field">
             <label>DNI</label>
@@ -1604,7 +1618,7 @@ function App() {
               pattern="[0-9]{1,20}"
               maxLength={20}
               value={newAlumno.dni}
-              disabled={!canAssignStudentCourse}
+              disabled={modalAlumno.mode === "view" || !canAssignStudentCourse}
               onChange={(e) =>
                 setNewAlumno({ ...newAlumno, dni: e.target.value })
               }
@@ -1615,7 +1629,7 @@ function App() {
               <label>Apellido</label>
               <input
                 value={newAlumno.apellido}
-                disabled={!canEditStudentDetails}
+                disabled={modalAlumno.mode === "view" || !canEditStudentDetails}
                 onChange={(e) =>
                   setNewAlumno({ ...newAlumno, apellido: e.target.value })
                 }
@@ -1626,7 +1640,7 @@ function App() {
               <label>Nombre</label>
               <input
                 value={newAlumno.nombre}
-                disabled={!canEditStudentDetails}
+                disabled={modalAlumno.mode === "view" || !canEditStudentDetails}
                 onChange={(e) =>
                   setNewAlumno({ ...newAlumno, nombre: e.target.value })
                 }
@@ -1638,7 +1652,7 @@ function App() {
               <input
                 type="email"
                 value={newAlumno.email}
-                disabled={!canEditStudentDetails}
+                disabled={modalAlumno.mode === "view" || !canEditStudentDetails}
                 onChange={(e) =>
                   setNewAlumno({ ...newAlumno, email: e.target.value })
                 }
@@ -1646,21 +1660,39 @@ function App() {
             </div>
             <div className="field">
               <label htmlFor="alumno-nacimiento">Fecha de nacimiento</label>
-              <input id="alumno-nacimiento" type="date" disabled={!canEditStudentDetails}
+              <input
+                id="alumno-nacimiento"
+                type="date"
+                disabled={modalAlumno.mode === "view" || !canEditStudentDetails}
                 value={newAlumno.fecha_nacimiento}
-                onChange={(event) => setNewAlumno({ ...newAlumno, fecha_nacimiento: event.target.value })} />
+                onChange={(event) =>
+                  setNewAlumno({ ...newAlumno, fecha_nacimiento: event.target.value })
+                }
+              />
             </div>
             <div className="field">
               <label htmlFor="alumno-genero">Género</label>
-              <input id="alumno-genero" maxLength={30} disabled={!canEditStudentDetails}
+              <input
+                id="alumno-genero"
+                maxLength={30}
+                disabled={modalAlumno.mode === "view" || !canEditStudentDetails}
                 value={newAlumno.genero}
-                onChange={(event) => setNewAlumno({ ...newAlumno, genero: event.target.value })} />
+                onChange={(event) =>
+                  setNewAlumno({ ...newAlumno, genero: event.target.value })
+                }
+              />
             </div>
             <div className="field">
               <label htmlFor="alumno-nacionalidad">Nacionalidad</label>
-              <input id="alumno-nacionalidad" maxLength={60} disabled={!canEditStudentDetails}
+              <input
+                id="alumno-nacionalidad"
+                maxLength={60}
+                disabled={modalAlumno.mode === "view" || !canEditStudentDetails}
                 value={newAlumno.nacionalidad}
-                onChange={(event) => setNewAlumno({ ...newAlumno, nacionalidad: event.target.value })} />
+                onChange={(event) =>
+                  setNewAlumno({ ...newAlumno, nacionalidad: event.target.value })
+                }
+              />
             </div>
              <div className="modal-sub">Domicilio</div>
 
@@ -1670,7 +1702,7 @@ function App() {
                 id="alumno-calle"
                 type="text"
                 value={newAlumno.calle}
-                disabled={!canEditStudentDetails}
+                disabled={modalAlumno.mode === "view" || !canEditStudentDetails}
                 onChange={(e) =>
                   setNewAlumno({ ...newAlumno, calle: e.target.value })
                 }
@@ -1690,7 +1722,7 @@ function App() {
                 id="alumno-numero-calle"
                 type="text"
                 value={newAlumno.numero_calle}
-                disabled={!canEditStudentDetails}
+                disabled={modalAlumno.mode === "view" || !canEditStudentDetails}
                 onChange={(e) =>
                   setNewAlumno({ ...newAlumno, numero_calle: e.target.value })
                 }
@@ -1704,7 +1736,7 @@ function App() {
           id="alumno-departamento"
           type="text"
           value={newAlumno.departamento}
-                disabled={!canEditStudentDetails}
+                disabled={modalAlumno.mode === "view" || !canEditStudentDetails}
           onChange={(e) =>
             setNewAlumno({ ...newAlumno, departamento: e.target.value })
           }
@@ -1718,7 +1750,7 @@ function App() {
           id="alumno-localidad"
           type="text"
           value={newAlumno.localidad}
-                disabled={!canEditStudentDetails}
+                disabled={modalAlumno.mode === "view" || !canEditStudentDetails}
           onChange={(e) =>
             setNewAlumno({ ...newAlumno, localidad: e.target.value })
           }
@@ -1739,7 +1771,11 @@ function App() {
                 onChange={(e) =>
                   setNewAlumno({ ...newAlumno, id_curso: e.target.value })
                 }
-                disabled={!canAssignStudentCourse || newAlumno.estado !== "Activo"}
+                disabled={
+                  modalAlumno.mode === "view" ||
+                  !canAssignStudentCourse ||
+                  newAlumno.estado !== "Activo"
+                }
               >
                 <option value="">Sin curso</option>
                 {cursos.map((curso) => (
@@ -1753,7 +1789,7 @@ function App() {
               <label>Estado</label>
               <select
                 value={newAlumno.estado}
-                disabled={!canEditStudentStatus}
+                disabled={modalAlumno.mode === "view" || !canEditStudentStatus}
                 onChange={(e) =>
                   setNewAlumno({
                     ...newAlumno,
@@ -1807,12 +1843,14 @@ function App() {
                 className="btn btn-ghost"
                 onClick={() => setModalAlumno(null)}
               >
-                Cancelar
+                {modalAlumno.mode === "view" ? "Cerrar" : "Cancelar"}
               </button>
 
-              <button type="submit" className="btn btn-blue">
-                Guardar ✓
-              </button>
+              {modalAlumno.mode !== "view" && (
+                <button type="submit" className="btn btn-blue">
+                  Guardar ✓
+                </button>
+              )}
             </div>
           </form>
         </div>
@@ -2923,6 +2961,7 @@ function AlumnosPage({
   canAddStudent,
   openNewAlumno,
   openEditAlumno,
+  openViewAlumno,
 }) {
   const [currentPage, setCurrentPage] = useState(1);
   const pageSize = 50;
@@ -2992,7 +3031,7 @@ function AlumnosPage({
                 <th>Apellido(s) y nombre(s)</th>
                 <th>Curso</th>
                 <th>Estado</th>
-                {canManageStudents && <th>Acciones</th>}
+                <th>Acciones</th>
               </tr>
             </thead>
             <tbody>
@@ -3019,23 +3058,31 @@ function AlumnosPage({
                       {alumno.estado}
                     </span>
                   </td>
-                  {canManageStudents && (
-                    <td>
-                      <div className="action-row">
+                  <td>
+                    <div className="action-row">
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-sm"
+                        onClick={() => openViewAlumno(alumno)}
+                      >
+                        Más info
+                      </button>
+                      {canManageStudents && (
                         <button
+                          type="button"
                           className="btn btn-ghost btn-sm"
                           onClick={() => openEditAlumno(alumno)}
                         >
                           Editar
                         </button>
-                      </div>
-                    </td>
-                  )}
+                      )}
+                    </div>
+                  </td>
                 </tr>
               ))}
               {!alumnos.length && (
                 <tr>
-                  <td colSpan={canManageStudents ? 5 : 4}>
+                  <td colSpan={5}>
                     <div className="empty-state">
                       No hay alumnos que coincidan con el filtro.
                     </div>
