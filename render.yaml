@@ -16,3 +16,15 @@ services:
         sync: false
       - key: CORS_ORIGIN
         sync: false
+  - type: web
+    name: la35notas
+    runtime: static
+    buildCommand: npm install && npm run build
+    staticPublishPath: ./dist
+    envVars:
+      - key: VITE_API_URL
+        value: https://la35notas-api.onrender.com/api
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
